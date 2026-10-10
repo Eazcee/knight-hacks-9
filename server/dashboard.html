@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon</title>
+<style>
+:root{
+  --bg:#0e1013; --panel:#161a1f; --panel2:#1d2229; --line:#2a313a; --text:#e8ecf1; --muted:#8b95a3;
+  --accent:#4cc38a; --accent2:#3b82f6; --warn:#f5a524; --danger:#ef4444; --radius:12px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+button{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:#46505c}
+button.primary{background:var(--accent);color:#06210f;border-color:var(--accent);font-weight:600}
+button.danger{background:transparent;color:#ff8a8a;border-color:#5a2a2a}
+button.ghost{background:transparent}
+input,textarea,select{font:inherit;color:var(--text);background:#0f1216;border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+textarea{min-height:64px;resize:vertical}
+small,.muted{color:var(--muted)}
+header{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line);background:#12151a;position:sticky;top:0;z-index:5}
+header h1{font-size:18px;margin:0;letter-spacing:.5px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px 10px;color:var(--muted);font-size:12px}
+.chip b{color:var(--text);font-weight:600}
+.spacer{flex:1}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16px 20px}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+.panel h2{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:0 0 10px;font-weight:600;display:flex;align-items:center;gap:8px}
+.panel h2 .right{margin-left:auto;display:flex;gap:6px}
+.top{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px}
+.live{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:9/16;max-height:420px;width:100%;display:flex;align-items:center;justify-content:center}
+.live img{width:100%;height:100%;object-fit:contain}
+.live .empty{color:var(--muted);padding:20px;text-align:center}
+.hud{background:#020403;border:1px solid #1f3a2b;border-radius:14px;padding:18px;min-height:150px;font-size:18px;color:#d9ffe9;box-shadow:inset 0 0 40px rgba(76,195,138,.08)}
+.hud .t{font-weight:700;font-size:20px;margin-bottom:6px}
+.hud.alert{border-color:#7a1f1f;color:#ffd7d7;box-shadow:inset 0 0 40px rgba(239,68,68,.15)}
+.hud.alert .t{color:#ff6b6b}
+.alert-row{display:flex;gap:10px;align-items:center;background:#2a1414;border:1px solid #5a2a2a;border-radius:10px;padding:8px;margin-top:8px}
+.alert-row img{width:44px;height:44px;border-radius:8px;object-fit:cover}
+.banner{display:flex;align-items:center;gap:12px;border-radius:10px;padding:10px 12px;background:#10261a;border:1px solid #1f5137}
+.banner.train{background:#2a2310;border-color:#5a4a1a}
+.progress{height:6px;background:#2b2f36;border-radius:3px;overflow:hidden;flex:1;min-width:80px}
+.progress i{display:block;height:100%;background:var(--warn)}
+.people{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:border-color .15s,transform .15s}
+.card:hover{border-color:#4b5563;transform:translateY(-1px)}
+.card .ph{aspect-ratio:1;background:#0b0d10 center/cover no-repeat;position:relative}
+.card .ph .badge{position:absolute;top:6px;left:6px}
+.card .ph .live-dot{position:absolute;top:8px;right:8px;width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(76,195,138,.25)}
+.card .meta{padding:8px 10px}
+.card .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .sub{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;background:#2b3240;color:#cbd5e1;border:1px solid #3a4352}
+.badge.watch{background:#3a1515;color:#ffb4b4;border-color:#6b2a2a}
+.badge.train{background:#3a2f10;color:#ffd98a;border-color:#6b5520}
+.badge.photo{background:#152a3a;color:#a6d4ff;border-color:#24506b}
+.sugg{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:8px}
+.sugg img{width:56px;height:56px;border-radius:8px;object-fit:cover;background:#0b0d10}
+.timeline{display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow:auto}
+.tl{display:flex;gap:10px;align-items:center;padding:6px;border-radius:8px;cursor:pointer}
+.tl:hover{background:var(--panel2)}
+.tl img{width:40px;height:40px;border-radius:8px;object-fit:cover;background:#0b0d10;flex:none}
+#map{width:100%;height:320px;display:block;background:#0f1216;border-radius:10px}
+/* modal */
+.overlay{position:fixed;inset:0;background:rgba(5,7,9,.78);display:none;z-index:20;overflow:auto;padding:30px}
+.overlay.open{display:block}
+.modal{max-width:1100px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px}
+.mhead{display:grid;grid-template-columns:220px minmax(0,1fr);gap:20px}
+.mhead .big{width:220px;height:220px;border-radius:14px;background:#0b0d10 center/cover no-repeat;cursor:zoom-in;border:1px solid var(--line)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.tile{background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden;position:relative}
+.tile .im{aspect-ratio:1;background:#0b0d10 center/cover no-repeat;cursor:zoom-in}
+.tile .cap{padding:6px 8px;font-size:12px;color:var(--muted)}
+.tile .acts{display:flex;flex-direction:column;gap:4px;padding:0 6px 6px}
+.tile .acts button,.tile .acts select{padding:4px 6px;font-size:12px;width:100%}
+.tile .acts .two{display:flex;gap:4px}
+.qbar{height:4px;background:#2b2f36}
+.qbar i{display:block;height:100%}
+.section{margin-top:22px}
+.section h3{margin:0 0 4px;font-size:15px}
+.close{position:sticky;top:0;float:right}
+/* lightbox */
+.lb{position:fixed;inset:0;background:rgba(0,0,0,.94);display:none;z-index:40;align-items:center;justify-content:center;flex-direction:column}
+.lb.open{display:flex}
+.lb .stage{position:relative;max-width:94vw;max-height:80vh}
+.lb .stage img{display:block;max-width:94vw;max-height:80vh}
+.lb .box{position:absolute;border:3px solid var(--accent);border-radius:6px;box-shadow:0 0 0 2000px rgba(0,0,0,.0)}
+.lb .bar{display:flex;gap:10px;align-items:center;margin-top:12px;color:#cbd5e1}
+.lb .nav{position:fixed;top:50%;transform:translateY(-50%);font-size:28px;background:rgba(255,255,255,.08);border:0;width:48px;height:64px}
+.lb .nav.l{left:16px}.lb .nav.r{right:16px}
+.lb .x{position:fixed;top:16px;right:16px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#0b2a1b;border:1px solid #1f5137;color:#c9f5dd;padding:10px 16px;border-radius:10px;display:none;z-index:60}
+@media (max-width:1100px){main{grid-template-columns:1fr}.top{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>BEACON</h1>
+  <div class="chips" id="chips"></div>
+  <div class="spacer"></div>
+  <button onclick="openTrainNew()">+ Train new person</button>
+  <button onclick="$('scanFile').click()" title="Run a big photo through Scan (what a 12 MP glasses photo does)">Scan a photo</button>
+  <input type="file" id="scanFile" accept="image/*" style="display:none" onchange="scanPhoto(this)">
+  <button onclick="openAlert()" style="border-color:#6b2a2a">Load alert photo</button>
+  <button class="danger" onclick="deleteAll()">Delete all</button>
+</header>
+
+<main>
+  <div class="col">
+    <div id="trainBanner"></div>
+    <div class="top">
+      <div class="panel">
+        <h2>Live camera <span class="right"><small id="liveInfo" style="text-transform:none;letter-spacing:0"></small></span></h2>
+        <div class="live" id="live"><div class="empty">Waiting for the glasses…<br><small>Start streaming in the Beacon app</small></div></div>
+      </div>
+      <div class="col">
+        <div class="panel">
+          <h2>On the glasses</h2>
+          <div class="hud" id="hud"></div>
+        </div>
+        <div class="panel">
+          <h2>Alerts <span class="right"><button onclick="api('/report',{method:'POST'}).then(r=>toast(r.say||'Reported'))">Report latest</button></span></h2>
+          <div id="alerts"><small>No alerts. Load an alert photo to start watching for someone.</small></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>People <span class="muted" id="peopleCount"></span>
+        <span class="right"><small>Click a person to see and fix their photos</small></span></h2>
+      <div id="suggestions"></div>
+      <div class="people" id="people" style="margin-top:10px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Map <span class="right">
+        <button onclick="markPlace()">Mark place here</button>
+        <button onclick="api('/route',{method:'DELETE'})">Cancel route</button>
+        <button class="danger" onclick="clearMap()">Clear map</button></span></h2>
+      <canvas id="map"></canvas>
+      <small>Places appear from step counts, QR anchors (<code>place:Name</code>), or "Mark place here". Click a place to rename, route, or block a path.</small>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel">
+      <h2>Timeline</h2>
+      <div class="timeline" id="timeline"><small>Nothing yet.</small></div>
+    </div>
+  </div>
+</main>
+
+<div class="overlay" id="personOverlay" onclick="if(event.target===this)closePerson()"><div class="modal" id="personModal"></div></div>
+<div class="overlay" id="alertOverlay" onclick="if(event.target===this)closeAlert()"><div class="modal" style="max-width:640px" id="alertModal"></div></div>
+
+<div class="lb" id="lb">
+  <button class="x" onclick="closeLb()">Close (Esc)</button>
+  <button class="nav l" onclick="lbStep(-1)">‹</button>
+  <div class="stage" id="lbStage"></div>
+  <div class="bar" id="lbBar"></div>
+  <button class="nav r" onclick="lbStep(1)">›</button>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(url,opt={}){
+  if(opt.json!==undefined){opt.body=JSON.stringify(opt.json);opt.headers={'content-type':'application/json'};delete opt.json}
+  const r=await fetch(url,opt);let d=null;try{d=await r.json()}catch(e){}
+  if(!r.ok){toast((d&&d.detail)||('Error '+r.status));throw new Error(r.status)}
+  return d;
+}
+function toast(msg,ms=2600){const t=$('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',ms)}
+const qColor=q=>q>=.65?'#4cc38a':q>=.45?'#f5a524':'#ef4444';
+const label=p=>p.name||('Unknown · '+p.id);
+
+let S=null, lastPeopleKey='', lastTlKey='', personOpen=null;
+
+async function tick(){
+  try{S=await api('/state')}catch(e){return}
+  renderChips();renderLive();renderHud();renderAlerts();renderTrain();renderPeople();renderTimeline();drawMap();
+}
+setInterval(tick,1000);tick();
+setInterval(()=>{if(S&&S.n_suggestions>0)loadSuggestions();else $('suggestions').innerHTML=''},4000);
+
+function renderChips(){
+  const inView=S.last_people.length;
+  $('chips').innerHTML=`<span class="chip"><b>${S.frames}</b> frames</span><span class="chip"><b>${S.people.length}</b> people</span>
+  <span class="chip"><b>${S.map.nodes.length}</b> places</span><span class="chip"><b>${inView}</b> in view</span>
+  ${S.dropped?`<span class="chip"><b>${S.dropped}</b> dropped</span>`:''}
+  ${S.frame_size?`<span class="chip" title="Resolution the server receives. Bigger = longer range.">frame <b>${S.frame_size[0]}×${S.frame_size[1]}</b></span>`:''}
+  ${S.far_unknown?`<span class="chip" title="Faces seen but too small or unclear to name">far <b>${S.far_unknown}</b></span>`:''}`;
+}
+function renderLive(){
+  if(!S.has_live)return;
+  const box=$('live');let img=box.querySelector('img');
+  if(!img){box.innerHTML='<img alt="live camera">';img=box.querySelector('img')}
+  img.src='/live.jpg?'+Date.now();
+  const lp=S.last_people.map(p=>(p.possible?'possible ':'')+(p.name||p.watch_label||p.person_id)+' '+Math.round(p.sim*100)+'% · '+p.px+'px'+(p.tier==='far'?' (far)':''));
+  if(S.far_unknown)lp.push(S.far_unknown+' too far/unclear');
+  $('liveInfo').textContent=lp.join(' · ');
+}
+function renderHud(){
+  const d=S.display;const h=$('hud');h.className='hud'+(d.level==='alert'?' alert':'');
+  h.innerHTML=`<div class="t">${esc(d.title||'—')}</div>${(d.lines||[]).map(l=>`<div>${esc(l)}</div>`).join('')||'<div class="muted">nothing to show</div>'}`;
+}
+function renderAlerts(){
+  if(!S.alerts.length){return}
+  $('alerts').innerHTML=S.alerts.slice(0,4).map(a=>`<div class="alert-row"><div style="flex:1"><b>${esc(a.watch_label||'ALERT')}</b><br>
+  <small>${esc(a.place||'unknown place')} · ${esc(a.ago)} · match ${Math.round(a.sim*100)}%</small></div>
+  <button onclick="openPerson('${a.person_id}')">Open</button></div>`).join('');
+}
+function renderTrain(){
+  const t=S.train;const b=$('trainBanner');
+  if(!t||t.done){b.innerHTML=t&&t.done?`<div class="banner"><b>Training done</b><span>${esc(t.name||t.person_id)}: ${t.added} new photos</span><div class="spacer"></div><button onclick="openPerson('${t.person_id}')">Review photos</button><button class="ghost" onclick="api('/train/stop',{method:'POST'})">Dismiss</button></div>`:'';return}
+  b.innerHTML=`<div class="banner train"><b>Training ${esc(t.name||t.person_id)}</b><span>Have them face the glasses and slowly turn their head left, right, up, down.</span>
+  <div class="progress"><i style="width:${Math.min(100,t.added/t.goal*100)}%"></i></div><span>${t.added}/${t.goal} · ${t.seconds_left}s</span>
+  <button onclick="api('/train/stop',{method:'POST'})">Stop</button></div>`;
+}
+function renderPeople(){
+  const inView=new Set(S.last_people.map(p=>p.person_id));
+  const key=JSON.stringify(S.people.map(p=>[p.id,p.name,p.photo,p.n_train,p.n_seen,p.last_place,p.is_watch,inView.has(p.id),p.last_seen_ago]));
+  if(key===lastPeopleKey)return;lastPeopleKey=key;
+  $('peopleCount').textContent=S.people.length?`(${S.people.length})`:'';
+  $('people').innerHTML=S.people.map(p=>`<div class="card" onclick="openPerson('${p.id}')">
+    <div class="ph" style="background-image:url('${p.photo||''}')">${p.is_watch?'<span class="badge watch badge">ALERT</span>':''}${inView.has(p.id)?'<span class="live-dot" title="in view now"></span>':''}</div>
+    <div class="meta"><div class="nm">${esc(p.name||'Unknown')}</div>
+    <div class="sub">${p.n_train||0} training · seen ${p.n_seen||0}×</div>
+    <div class="sub">${esc(p.last_place||'—')} · ${esc(p.last_seen_ago||'')}</div></div></div>`).join('')||'<small>No one yet. Look at someone with the glasses on.</small>';
+}
+function renderTimeline(){
+  const key=JSON.stringify(S.sightings.map(s=>[s.id,s.person_name]));
+  if(key===lastTlKey){document.querySelectorAll('[data-ago]').forEach(()=>{});return}lastTlKey=key;
+  window._tl=S.sightings;
+  $('timeline').innerHTML=S.sightings.map((s,i)=>`<div class="tl" onclick="lbOpen(window._tl,${i})"><img src="${s.photo||''}" alt="">
+   <div style="min-width:0"><div><b>${esc(s.person_name||s.person_id)}</b></div><small>${esc(s.place||'no place')} · ${esc(s.ago)} · ${Math.round(s.sim*100)}%</small></div></div>`).join('')||'<small>Nothing yet.</small>';
+}
+async function loadSuggestions(){
+  let L=[];try{L=await api('/suggestions')}catch(e){return}
+  $('suggestions').innerHTML=L.length?`<div class="banner" style="flex-direction:column;align-items:stretch"><b>These might be the same person</b>
+  ${L.slice(0,4).map(s=>`<div class="sugg"><img src="${s.a.photo||''}"><img src="${s.b.photo||''}">
+   <div style="flex:1"><b>${esc(label(s.a))}</b> and <b>${esc(label(s.b))}</b><br><small>similarity ${Math.round(s.sim*100)}%</small></div>
+   <button class="primary" onclick="merge('${s.a.id}','${s.b.id}')">Same person, merge</button>
+   <button onclick="api('/suggestions/dismiss',{method:'POST',json:{a:'${s.a.id}',b:'${s.b.id}'}}).then(loadSuggestions)">Not the same</button></div>`).join('')}</div>`:'';
+}
+async function merge(a,b){
+  // keep the one with a name, or the one with more photos
+  const pa=S.people.find(p=>p.id===a),pb=S.people.find(p=>p.id===b);
+  let src=a,dst=b;if(pa&&pb&&((pa.name&&!pb.name)||(!pa.name===!pb.name&&(pa.n_train||0)>(pb.n_train||0)))){src=b;dst=a}
+  await api(`/people/${src}/merge`,{method:'POST',json:{into:dst}});toast('Merged');lastPeopleKey='';loadSuggestions();
+  if(personOpen)openPerson(dst);
+}
+
+// ---------------- person page
+async function openPerson(pid){
+  personOpen=pid;let d;try{d=await api(`/people/${pid}/photos`)}catch(e){return}
+  const p=d.person;window._train=d.training.map(t=>({...t,kind:'train'}));window._sight=d.sightings;
+  const others=S.people.filter(o=>o.id!==pid);
+  $('personModal').innerHTML=`
+  <button class="close" onclick="closePerson()">Close (Esc)</button>
+  <div class="mhead">
+    <div class="big" style="background-image:url('${p.photo||''}')" onclick="window._train.length?lbOpen(window._train,0):(window._sight.length&&lbOpen(window._sight,0))"></div>
+    <div>
+      <div class="row" style="margin-bottom:8px"><span class="badge">${esc(p.id)}</span>${p.is_watch?`<span class="badge watch">${esc(p.watch_label||'ALERT')}</span>`:''}
+        <small>last seen ${esc(p.last_place||'—')} · ${esc(p.last_seen_ago||'never')}</small></div>
+      <div class="row" style="flex-wrap:nowrap;gap:12px"><div style="flex:1"><small>Name</small><input id="pName" value="${esc(p.name||'')}" placeholder="Who is this?"></div></div>
+      <div style="margin-top:8px"><small>Notes</small><textarea id="pNotes" placeholder="What should the glasses show when you see them?">${esc(p.notes||'')}</textarea></div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" onclick="savePerson('${pid}')">Save</button>
+        <button onclick="trainPerson('${pid}')" title="Look at them through the glasses while they turn their head">Train 20 s</button>
+        <button onclick="api('/route?to_person=${pid}').then(r=>toast(r.ok?'Route: '+r.cost_m+' m':'No route: '+r.reason)).catch(()=>{})">Route to last sighting</button>
+        ${p.is_watch?`<button onclick="api('/watch/${pid}',{method:'DELETE'}).then(()=>openPerson('${pid}'))">Clear alert</button>`:`<button onclick="markAlert('${pid}')">Mark as alert</button>`}
+        <select onchange="if(this.value){merge('${pid}',this.value)}" style="width:auto"><option value="">Merge into…</option>${others.map(o=>`<option value="${o.id}">${esc(label(o))}</option>`).join('')}</select>
+        <button class="danger" onclick="delPerson('${pid}')">Delete person</button>
+      </div>
+    </div>
+  </div>
+  <div class="section"><h3>Training photos <small>(${d.training.length}/${d.max_training})</small></h3>
+    <small>Recognition compares every new face against these. Remove blurry or wrong ones; add good sightings with “+ train”. Bar = photo quality.</small>
+    <div class="grid" style="margin-top:10px">${d.training.map((t,i)=>`<div class="tile">
+      <div class="im" style="background-image:url('${t.photo||''}')" onclick="lbOpen(window._train,${i})"></div>
+      <div class="qbar"><i style="width:${Math.round(t.quality*100)}%;background:${qColor(t.quality)}"></i></div>
+      <div class="cap">${t.source==='train'?'<span class="badge train">trained</span>':t.source==='photo'?'<span class="badge photo">photo</span>':t.source==='manual'?'<span class="badge">added</span>':'<span class="badge">auto</span>'} ${Math.round(t.quality*100)}%</div>
+      <div class="acts"><button onclick="rmTrain(${t.id},'${pid}')" title="Remove from training">✕ Remove</button>
+      <select onchange="if(this.value)moveTrain(${t.id},this.value,'${pid}')"><option value="">Not them, move to…</option><option value="new">a new person</option>${others.map(o=>`<option value="${o.id}">${esc(label(o))}</option>`).join('')}</select></div>
+    </div>`).join('')||'<small>No training photos yet.</small>'}</div></div>
+  <div class="section"><h3>Sightings <small>(${d.sightings.length})</small></h3>
+    <small>Every time the glasses logged them. Click to see the full camera frame.</small>
+    <div class="grid" style="margin-top:10px">${d.sightings.map((s,i)=>`<div class="tile">
+      <div class="im" style="background-image:url('${s.photo||''}')" onclick="lbOpen(window._sight,${i})"></div>
+      <div class="qbar"><i style="width:${Math.round((s.quality||0)*100)}%;background:${qColor(s.quality||0)}"></i></div>
+      <div class="cap">${esc(s.ago)} · ${esc(s.place||'no place')}<br>match ${Math.round(s.sim*100)}%</div>
+      <div class="acts"><div class="two"><button onclick="trainFrom(${s.id},'${pid}')" title="Add to training photos">+ Train</button><button onclick="notThem(${s.id},'${pid}')" title="Move to a new person">Not them</button></div></div>
+    </div>`).join('')||'<small>No sightings yet.</small>'}</div></div>`;
+  $('personOverlay').classList.add('open');
+}
+function closePerson(){$('personOverlay').classList.remove('open');personOpen=null}
+async function savePerson(pid){await api(`/people/${pid}`,{method:'POST',json:{name:$('pName').value,notes:$('pNotes').value}});toast('Saved');lastPeopleKey='';openPerson(pid)}
+async function trainPerson(pid){await api('/train/start',{method:'POST',json:{person_id:pid,seconds:20,goal:10}});toast('Training: look at them through the glasses');closePerson()}
+async function rmTrain(eid,pid){await api(`/train_photos/${eid}`,{method:'DELETE'});openPerson(pid)}
+async function moveTrain(eid,to,pid){await api(`/train_photos/${eid}/move`,{method:'POST',json:{to}});toast('Moved');openPerson(pid)}
+async function trainFrom(sid,pid){await api(`/sightings/${sid}/train`,{method:'POST'});toast('Added to training');openPerson(pid)}
+async function notThem(sid,pid){await api(`/sightings/${sid}/move`,{method:'POST',json:{to:'new'}});toast('Moved to a new person');openPerson(pid)}
+async function delPerson(pid){if(!confirm('Delete this person and all their photos?'))return;await api(`/people/${pid}`,{method:'DELETE'});closePerson();lastPeopleKey=''}
+async function markAlert(pid){const l=prompt('Alert label (e.g. "AMBER Alert · Leo · 7")','ALERT');if(l===null)return;
+  await api(`/people/${pid}/flag?label=${encodeURIComponent(l||'ALERT')}`,{method:'POST'});openPerson(pid)}
+
+// ---------------- train new / alert upload
+async function openTrainNew(){const n=prompt('Name of the person to train (they should face the glasses):');if(n===null)return;
+  await api('/train/start',{method:'POST',json:{name:n,seconds:20,goal:10}});toast('Training '+(n||'new person'))}
+function openAlert(){
+  $('alertModal').innerHTML=`<button class="close" onclick="closeAlert()">Close</button><h3 style="margin-top:0">Load an alert photo</h3>
+  <small>A missing-person photo. Beacon checks whether the glasses have already seen them, and alerts the wearer if they appear.</small>
+  <div style="margin-top:12px"><small>Label</small><input id="aLabel" value="AMBER Alert · "></div>
+  <div style="margin-top:10px"><input type="file" id="aFile" accept="image/*"></div>
+  <div class="row" style="margin-top:12px"><button class="primary" onclick="sendAlert()">Check &amp; start watching</button></div>
+  <div id="aResult" style="margin-top:14px"></div>`;
+  $('alertOverlay').classList.add('open');
+}
+function closeAlert(){$('alertOverlay').classList.remove('open')}
+async function scanPhoto(inp){
+  const f=inp.files[0];inp.value='';if(!f)return;toast('Scanning…');
+  const fd=new FormData();fd.append('image',f);
+  let r;try{r=await api('/scan',{method:'POST',body:fd})}catch(e){return}
+  toast(`${r.display.title} · ${r.display.lines.join(' · ')} (${r.size[0]}×${r.size[1]}, ${(r.ms/1000).toFixed(1)} s)`,9000);
+  tick();
+}
+async function sendAlert(){
+  const f=$('aFile').files[0];if(!f){toast('Pick a photo first');return}
+  const fd=new FormData();fd.append('image',f);fd.append('label',$('aLabel').value||'ALERT');
+  let r;try{r=await api('/watch',{method:'POST',body:fd})}catch(e){return}
+  const last=r.last;
+  $('aResult').innerHTML=r.seen_before&&last?`<div class="banner" style="background:#2a1414;border-color:#6b2a2a;flex-wrap:wrap">
+    ${last.photo?`<img src="${last.photo}" style="width:72px;height:72px;border-radius:10px;object-fit:cover">`:''}
+    <div style="flex:1"><b style="font-size:16px">Seen before</b><br>${esc(last.place||'unknown place')} · ${esc(last.ago)} · match ${Math.round(r.sim*100)}%</div>
+    <button onclick="openPerson('${r.person_id}');closeAlert()">Open person</button>
+    ${r.route&&r.route.ok?`<span class="badge">route ${r.route.cost_m} m</span>`:''}</div>`
+   :`<div class="banner"><b>Not seen yet.</b> Watching for them now; the glasses will alert when they appear.</div>`;
+}
+
+// ---------------- lightbox
+let LB=[],LBi=0;
+function lbOpen(list,i){LB=list;LBi=i;lbShow();$('lb').classList.add('open')}
+function closeLb(){$('lb').classList.remove('open')}
+function lbStep(d){if(!LB.length)return;LBi=(LBi+d+LB.length)%LB.length;lbShow()}
+function lbShow(){
+  const it=LB[LBi];if(!it)return;const stage=$('lbStage');
+  const full=it.frame&&it.box;const src=full?it.frame:it.photo;
+  stage.innerHTML=`<img id="lbImg" src="${src}">`+(full?`<div class="box" id="lbBox"></div>`:'');
+  const img=$('lbImg');
+  img.onload=()=>{if(!full)return;const [x1,y1,x2,y2,W,H]=it.box;const b=$('lbBox');
+    b.style.left=(x1/W*100)+'%';b.style.top=(y1/H*100)+'%';b.style.width=((x2-x1)/W*100)+'%';b.style.height=((y2-y1)/H*100)+'%'};
+  const q=it.quality!=null?` · quality ${Math.round(it.quality*100)}%`:'';
+  $('lbBar').innerHTML=`<span>${LBi+1}/${LB.length}</span><span>${esc(it.person_name||'')}</span>
+   <span>${esc(it.ago||'')}${it.place?' · '+esc(it.place):''}${it.sim!=null?' · match '+Math.round(it.sim*100)+'%':''}${q}</span>
+   ${full?`<button onclick="window.open('${it.photo}')">Face only</button><button onclick="window.open('${it.frame}')">Full frame</button>`:''}`;
+}
+document.addEventListener('keydown',e=>{
+  if($('lb').classList.contains('open')){if(e.key==='Escape')closeLb();if(e.key==='ArrowRight')lbStep(1);if(e.key==='ArrowLeft')lbStep(-1);return}
+  if(e.key==='Escape'){closePerson();closeAlert()}
+});
+
+// ---------------- map
+const cv=$('map'),ctx=cv.getContext('2d');let MP=null;
+function fit(){const r=cv.getBoundingClientRect(),dpr=window.devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
+window.addEventListener('resize',()=>{fit();if(S)drawMap()});fit();
+function layout(){
+  const m=S.map,W=cv.clientWidth,H=cv.clientHeight,pad=40;let pts=m.nodes.map(n=>({id:n.id,x:n.x,y:n.y}));
+  const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
+  const spread=pts.length?Math.max(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys)):0;
+  if(pts.length>1&&spread<1.5){pts=pts.map((p,i)=>({id:p.id,x:Math.cos(i/pts.length*2*Math.PI)*5,y:Math.sin(i/pts.length*2*Math.PI)*5}))}
+  const all=pts.concat(spread<1.5?[]:[{x:m.position.x,y:m.position.y}]);
+  const minx=Math.min(...all.map(p=>p.x),0)-1,maxx=Math.max(...all.map(p=>p.x),0)+1,miny=Math.min(...all.map(p=>p.y),0)-1,maxy=Math.max(...all.map(p=>p.y),0)+1;
+  const sc=Math.min((W-2*pad)/(maxx-minx||1),(H-2*pad)/(maxy-miny||1));
+  const ox=(W-(maxx-minx)*sc)/2,oy=(H-(maxy-miny)*sc)/2;
+  const P=(x,y)=>[ox+(x-minx)*sc,H-(oy+(y-miny)*sc)];
+  const pos={};const taken=[];
+  pts.forEach(p=>{let [x,y]=P(p.x,p.y);let k=0;   // nudge places that sit on top of each other
+    while(taken.some(t=>Math.hypot(t[0]-x,t[1]-y)<16)&&k<12){k++;x+=Math.cos(k*2.4)*22;y+=Math.sin(k*2.4)*22}
+    taken.push([x,y]);pos[p.id]=[x,y]});
+  return {pos,P,fallback:spread<1.5};
+}
+function drawMap(){
+  const m=S.map,W=cv.clientWidth,H=cv.clientHeight;ctx.clearRect(0,0,W,H);
+  if(!m.nodes.length){ctx.fillStyle='#8b95a3';ctx.font='13px system-ui';ctx.fillText('No places yet. Walk with step counts on, scan a place: QR code, or press "Mark place here".',16,28);MP=null;return}
+  MP=layout();const {pos}=MP;
+  const onRoute=(a,b)=>m.route&&Math.abs(m.route.indexOf(a)-m.route.indexOf(b))===1&&m.route.includes(a)&&m.route.includes(b);
+  m.edges.forEach(e=>{if(e.a>e.b)return;const a=pos[e.a],b=pos[e.b];if(!a||!b)return;
+    ctx.lineWidth=onRoute(e.a,e.b)?4:2;ctx.strokeStyle=e.blocked?'#ef4444':onRoute(e.a,e.b)?'#4cc38a':'#3a4350';ctx.setLineDash(e.blocked?[6,6]:[]);
+    ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#6b7684';ctx.font='11px system-ui';ctx.fillText((e.dist*(1+e.crowd)).toFixed(0)+' m',(a[0]+b[0])/2+4,(a[1]+b[1])/2-4)});
+  m.nodes.forEach(n=>{const [x,y]=pos[n.id];const cur=n.id===m.current_node,goal=n.id===m.route_goal;
+    ctx.fillStyle=cur?'#4cc38a':goal?'#f5a524':'#3b82f6';ctx.beginPath();ctx.arc(x,y,cur?9:7,0,7);ctx.fill();
+    ctx.fillStyle='#e8ecf1';ctx.font='12px system-ui';ctx.fillText(n.name,x+12,y+4)});
+}
+cv.addEventListener('click',async e=>{
+  if(!MP||!S)return;const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;let best=null,bd=16;
+  S.map.nodes.forEach(n=>{const p=MP.pos[n.id];if(!p)return;const d=Math.hypot(p[0]-x,p[1]-y);if(d<bd){bd=d;best=n}});
+  if(!best)return;const a=prompt(`${best.name}: type a new name, "go" to route here, or "block <place number>"`,'go');if(!a)return;
+  if(a==='go'){const r2=await api('/route?to='+best.id);toast(r2.ok?'Route: '+r2.cost_m+' m':'No route')}
+  else if(a.startsWith('block ')){const other=S.map.nodes.find(n=>String(n.id)===a.slice(6).trim()||n.name.toLowerCase()===a.slice(6).trim().toLowerCase());
+    if(other)await api(`/edges/${best.id}/${other.id}`,{method:'POST',json:{blocked:true}})}
+  else await api('/nodes/'+best.id,{method:'POST',json:{name:a}});
+});
+async function markPlace(){const n=prompt('Name this place (optional):','');if(n===null)return;try{const r=await api('/places/mark',{method:'POST',json:{name:n}});toast('Marked '+r.name)}catch(e){}}
+async function clearMap(){if(!confirm('Forget all places? People and photos stay.'))return;await api('/map/clear',{method:'POST'});toast('Map cleared')}
+async function deleteAll(){if(!confirm('Wipe EVERYTHING: people, photos, places?'))return;await api('/reset',{method:'POST'});lastPeopleKey='';lastTlKey='';toast('Everything deleted')}
+</script>
+</body>
+</html>

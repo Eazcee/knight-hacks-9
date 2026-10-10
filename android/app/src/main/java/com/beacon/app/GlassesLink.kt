@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import com.meta.wearable.dat.camera.Camera
 import com.meta.wearable.dat.camera.addCamera
+import com.meta.wearable.dat.camera.removeCamera
 import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.camera.types.StreamState
 import com.meta.wearable.dat.camera.types.VideoQuality
@@ -178,10 +179,15 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
                   if (sessionStarted) display.resend()
                 }
               }
-              // Hinges just opened: the session we were holding back can start now.
-              if (info.isReady && previous?.isReady != true && _status.value.wantStreaming && session == null) {
-                retryJob?.cancel()
-                openSession()
+              // Glasses just became ready (unfolded and worn): start the session we were holding
+              // back, or give a surviving session back its camera.
+              if (info.isReady && previous?.isReady != true && _status.value.wantStreaming) {
+                if (session == null) {
+                  retryJob?.cancel()
+                  openSession()
+                } else {
+                  maybeReattachCamera()
+                }
               }
             }
           }
@@ -325,9 +331,13 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
               }
           cameraJobs +=
               scope.launch {
+                var wasActive = false
                 stream.state.collect { state ->
                   Log.i(TAG, "Stream $state")
                   _status.update { it.copy(stream = state) }
+                  val terminal = state == StreamState.STOPPED || state == StreamState.CLOSED
+                  if (!terminal) wasActive = true
+                  else if (wasActive) onStreamLost(s)
                 }
               }
           cameraJobs +=
@@ -344,6 +354,33 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
           Log.w(TAG, "addCamera failed: ${error.description}")
           note("Camera unavailable: ${error.description}")
         }
+  }
+
+  /**
+   * The stream ended but the session lives on: taking the glasses off stops the stream, while the
+   * session keeps trying to restore itself for ~30 s. A stopped stream can't be restarted, so the
+   * dead camera is detached and a new one is added once the session is STARTED and the glasses are
+   * ready again (see [maybeReattachCamera]).
+   */
+  private fun onStreamLost(s: DeviceSession) {
+    if (s !== session || camera == null) return
+    Log.i(TAG, "Stream ended while the session is alive: detaching camera")
+    cameraJobs.forEach { it.cancel() }
+    cameraJobs.clear()
+    camera = null
+    s.removeCamera().onFailure { error, _ -> Log.w(TAG, "removeCamera failed: ${error.description}") }
+    _status.update { it.copy(stream = null) }
+    maybeReattachCamera()
+  }
+
+  /** Adds a fresh camera when the session is up, the glasses are ready, and none is attached. */
+  private fun maybeReattachCamera() {
+    val s = session ?: return
+    if (camera != null || !_status.value.wantStreaming) return
+    if (_status.value.session != DeviceSessionState.STARTED) return
+    if (_status.value.devices.values.none { it?.isReady == true }) return
+    Log.i(TAG, "Re-adding camera to the live session")
+    addCamera(s)
   }
 
   private fun teardownSession() {

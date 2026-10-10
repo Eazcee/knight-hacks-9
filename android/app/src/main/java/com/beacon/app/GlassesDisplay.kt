@@ -171,7 +171,7 @@ class GlassesDisplay(private val scope: CoroutineScope) {
           .sendContent { render(card) }
           .onSuccess {
             lastSentAt = SystemClock.elapsedRealtime()
-            Log.d(TAG, "Shown: $card")
+            Log.d(TAG, "Shown: ${card.toString().replace('\n', '⏎')}")
             _status.update { it.copy(shown = card, sends = it.sends + 1, error = null) }
           }
           .onFailure { error, _ ->
@@ -203,7 +203,10 @@ class GlassesDisplay(private val scope: CoroutineScope) {
         lines = card.lines
       }
       lines.take(MAX_LINES).forEach { line ->
-        text(line, style = TextStyle.BODY, color = if (card.isAlert) TextColor.PRIMARY else TextColor.SECONDARY)
+        // Notes can hold line breaks ("- beard\n-cs"); on the glasses each would become an extra
+        // row past the 3-line budget, so they're folded into one line.
+        val flat = line.replace(Regex("\\s*\\n+\\s*"), " · ")
+        text(flat, style = TextStyle.BODY, color = if (card.isAlert) TextColor.PRIMARY else TextColor.SECONDARY)
       }
     }
   }

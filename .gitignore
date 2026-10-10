@@ -14,3 +14,8 @@ android/build/
 android/app/build/
 *.iml
 .DS_Store
+
+# Neon
+.neon
+.env.local
+node_modules/

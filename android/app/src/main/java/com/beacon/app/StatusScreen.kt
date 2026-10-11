@@ -49,6 +49,7 @@ fun StatusScreen(
     glasses: GlassesLink,
     onGrantBluetooth: () -> Unit,
     uploader: FrameUploader,
+    sensors: PhoneSensors,
     settings: Settings,
     onRegister: () -> Unit,
     onUnregister: () -> Unit,
@@ -59,6 +60,7 @@ fun StatusScreen(
   val stats by uploader.stats.collectAsStateWithLifecycle()
   val serverUrl by settings.serverUrl.collectAsStateWithLifecycle()
   val display by glasses.display.status.collectAsStateWithLifecycle()
+  val phone by sensors.status.collectAsStateWithLifecycle()
 
   MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
     Surface(Modifier.fillMaxSize()) {
@@ -125,13 +127,42 @@ fun StatusScreen(
           }
         }
 
+        Section("Phone (sent with every frame)") {
+          StatRow(
+              "GPS",
+              when {
+                !phone.locationAllowed -> "not allowed"
+                phone.accuracyM != null -> "±%.0f m".format(phone.accuracyM)
+                status.wantStreaming -> "waiting for a fix…"
+                else -> "on while streaming"
+              },
+              when {
+                !phone.locationAllowed -> MaterialTheme.colorScheme.error
+                phone.accuracyM != null && phone.accuracyM!! <= 10f -> Good
+                phone.accuracyM != null -> Warn
+                else -> null
+              },
+          )
+          StatRow(
+              "Steps",
+              when {
+                !phone.hasStepSensor -> "no step sensor"
+                !phone.stepsAllowed -> "not allowed"
+                phone.steps != null -> phone.steps.toString()
+                else -> "–"
+              },
+              if (phone.hasStepSensor && !phone.stepsAllowed) MaterialTheme.colorScheme.error else null,
+          )
+          StatRow("Heading", "from walking direction (server)")
+        }
+
         Section("Server") {
           StatRow("Frames from glasses", stats.framesReceived.toString())
           StatRow("Frames sent", stats.framesSent.toString())
           StatRow("Send rate", "%.1f fps".format(stats.sendFps))
           StatRow("Latency", stats.lastLatencyMs?.let { "$it ms" } ?: "–")
           StatRow("Dropped by server", stats.serverDropped.toString())
-          StatRow("Skipped (upload busy)", stats.skippedBusy.toString())
+          StatRow("Not sent (newer frame won)", (stats.framesReceived - stats.framesSent).coerceAtLeast(0).toString())
           StatRow("Errors", stats.errors.toString(), if (stats.errors > 0) MaterialTheme.colorScheme.error else null)
           StatRow("People in last frame", stats.lastPeople.toString())
           stats.lastError?.let {

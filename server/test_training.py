@@ -51,11 +51,11 @@ group = idata.get_image("t1")
 scene = cv2.cvtColor(data.astronaut(), cv2.COLOR_RGB2BGR)
 t0 = time.time()
 
-# 1. no steps -> no place spam, even while "looking around"
+# 1. no GPS -> no places, even while "looking around"
 for i in range(8):
     frame(shifted(scene, 12 * i, -6 * i, 1 - 0.02 * i))
 m = c.get("/map").json()
-check(len(m["nodes"]) == 1, f"8 head-turn frames without step counts: {len(m['nodes'])} place (no spam)")
+check(len(m["nodes"]) == 0 and m["position"]["lat"] is None, "8 head-turn frames without GPS: no places, no position")
 
 # 2. people get photo URLs and training photos with quality scores
 r = frame(group)
@@ -143,14 +143,46 @@ c.post(f"/people/{pid}", json={"name": "Maya"})
 r = c.post("/command", json={"text": "train maya"}).json()
 check(r["ok"] and r["train"]["person_id"] == pid, f"voice: {r['say']}")
 c.post("/train/stop")
+check(c.post("/places/mark", json={"name": "x"}).status_code == 409, "can't mark a place without GPS")
+frame(scene, lat=28.6024, lng=-81.2001, acc=5)
 r = c.post("/places/mark", json={"name": "food court"}).json()
-check(r["name"] == "Food Court" and len(c.get("/map").json()["nodes"]) == 2, "marked a place by hand")
+check(r["name"] == "Food Court" and len(c.get("/map").json()["nodes"]) == 1, "marked a place by hand at the GPS position")
 c.post("/map/clear")
 check(len(c.get("/map").json()["nodes"]) == 0 and len(c.get("/people").json()) >= 4, "cleared map, kept people")
 html = c.get("/")
 check(html.status_code == 200 and "BEACON" in html.text, "dashboard served")
 st = c.get("/state").json()
 check("train" in st and "n_suggestions" in st and st["people"][0]["photo"], "state has photos, training, suggestions")
+
+# 8. drag-merge with undo, smarter suggestions, building names
+frame(group)
+ppl = c.get("/people").json()
+a, b = ppl[0], ppl[1]
+c.post(f"/people/{a['id']}", json={"name": "Alpha"})
+na, nb = a["n_train"], b["n_train"]
+r = c.post(f"/people/{b['id']}/merge", json={"into": a["id"]}).json()
+check(r["undo"] and c.get(f"/people/{b['id']}").status_code == 404, f"merged {r['src_name']} into {r['dst_name']}")
+r2 = c.post(f"/undo/{r['undo']}").json()
+back = {p["id"]: p for p in c.get("/people").json()}
+check(r2["ok"] and b["id"] in back and back[b["id"]]["n_train"] == nb and back[a["id"]]["n_train"] == na and back[a["id"]]["name"] == "Alpha",
+      "undo puts both people back exactly")
+check(c.post(f"/undo/{r['undo']}").status_code == 404, "can't undo twice")
+tp = c.get(f"/people/{a['id']}/photos").json()["training"]
+moved = c.post(f"/train_photos/{tp[0]['id']}/move", json={"to": "new"}).json()["person_id"]
+check(any({s["a"]["id"], s["b"]["id"]} == {a["id"], moved} for s in c.get("/suggestions").json()), "unnamed split is suggested as a merge")
+c.post(f"/people/{moved}", json={"name": "Bravo"})
+server._sugg_cache["t"] = 0
+check(not any({s["a"]["id"], s["b"]["id"]} == {a["id"], moved} for s in c.get("/suggestions").json()), "two different names are never suggested")
+r = c.delete(f"/people/{b['id']}").json()
+check(r["undo"] and c.get(f"/people/{b['id']}").status_code == 404, "deleted a person")
+c.post(f"/undo/{r['undo']}")
+back = {p["id"]: p for p in c.get("/people").json()}
+check(b["id"] in back and back[b["id"]]["n_train"] == nb and back[b["id"]]["n_seen"] == b["n_seen"] and server.faces.match(server.faces.gal_mat[server.faces.gal_ids.index(b["id"])])[0] == b["id"],
+      "undo delete: person, photos, sightings and recognition all back")
+server.settings["google_maps_key"] = "test"
+server.poi_cache["28.6024,-81.2000"] = "Harris Engineering Center"
+check(server._place_near(28.60241, -81.20012) == "Harris Engineering Center", "nearest building name from Places")
+server.settings["google_maps_key"] = ""
 
 print(f"\n{'ALL PASSED' if not fails else str(fails) + ' FAILED'} in {time.time() - t0:.1f}s")
 sys.exit(1 if fails else 0)

@@ -14,6 +14,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- GPS + pedometer sent with every frame (map, routes, dead reckoning). The location
+         foreground-service type keeps GPS flowing with the phone locked in a pocket. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+
     <application
         android:name=".BeaconApplication"
         android:allowBackup="false"
@@ -38,7 +45,7 @@
         <service
             android:name=".StreamingService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|location" />
 
         <activity
             android:name=".MainActivity"

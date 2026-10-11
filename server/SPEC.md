@@ -1,3 +1,5 @@
+> **Note (Oct 10, evening):** the map engine described below (camera keyframes, loop closure, 3D viewer plan) was replaced by a GPS map: see `README.md` → "Map & navigation" and `geo.py`. The faces/alert parts are still accurate.
+
 # Beacon — architecture, features, frontend, build plan
 
 **Pitch:** Smart glasses that remember every face you pass and *where* you passed it, on a map the camera built as you walked. When an alert comes in (AMBER / Silver / missing person), the glasses tell you if you've already seen that person, where and when, and route you back there over that map, re-routing around anything the camera sees blocking the way.

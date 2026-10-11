@@ -1,5 +1,6 @@
 package com.beacon.app
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,11 +8,13 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 
 /**
  * Keeps the glasses session and the uploads alive with the phone locked in a pocket (adapted from
@@ -53,12 +56,18 @@ class StreamingService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    // The location type keeps GPS flowing with the screen off, but Android rejects it without a
+    // location grant, so it's only claimed once the user has allowed location.
+    val locationGranted =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+    val types =
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+            (if (locationGranted) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0)
     try {
-      startForeground(
-          NOTIFICATION_ID,
-          notification(),
-          ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-      )
+      startForeground(NOTIFICATION_ID, notification(), types)
     } catch (e: Exception) {
       Log.e(TAG, "Failed to enter foreground", e)
       stopSelf()

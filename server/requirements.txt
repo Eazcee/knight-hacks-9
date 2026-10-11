@@ -1,0 +1,11 @@
+fastapi
+huggingface_hub
+httpx
+insightface
+numpy
+onnxruntime
+opencv-python
+python-multipart
+requests
+scikit-image
+uvicorn[standard]

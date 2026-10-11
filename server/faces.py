@@ -13,8 +13,9 @@ How the "categories" work:
     with their best, most varied angles.
   * Mistakes are fixed by people, not code: merge two people, remove a bad photo.
 
-Uses InsightFace (buffalo_l). On first run it downloads ~280 MB of models to
-~/.insightface/models.
+Uses the Apache-2.0 AuraFace v1 model from Hugging Face through InsightFace.
+On first run, Hugging Face Hub downloads the detector and recognizer to
+~/.insightface/models/auraface.
 """
 import os
 import threading
@@ -48,8 +49,34 @@ TRAIN_MODE_MIN_QUALITY = 0.30 # train mode is supervised, so we accept a bit mor
 SUGGEST_MERGE = 0.28          # cross-similarity above this = "might be the same person"
 AUTO_MAX_SIM = 0.80           # auto-learning skips photos this similar to one we already have
 TRAIN_MODE_MAX_SIM = 0.88     # train mode is a bit more generous (slow head turns change little per frame)
+MODEL = os.environ.get("BEACON_MODEL", "auraface")
+MODEL_ROOT = os.path.expanduser(os.environ.get("BEACON_MODEL_ROOT", "~/.insightface"))
+HF_MODEL_REPOS = {"auraface": "fal/AuraFace-v1"}
 DET_SIZE = int(os.environ.get("BEACON_DET", 640))                  # detector input, long side. smaller = faster, shorter range
 SCAN_TILE = int(os.environ.get("BEACON_SCAN_TILE", 1600))          # /scan: big photos are searched in tiles this size
+
+
+def _ensure_model():
+    """Download Hugging Face model files once, into InsightFace's model layout."""
+    repo = HF_MODEL_REPOS.get(MODEL)
+    if not repo:
+        return
+    model_dir = os.path.join(MODEL_ROOT, "models", MODEL)
+    required = ("scrfd_10g_bnkps.onnx", "glintr100.onnx")
+    if all(os.path.exists(os.path.join(model_dir, name)) for name in required):
+        return
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "AuraFace requires huggingface_hub. Install server/requirements.txt first."
+        ) from exc
+    print(f"Downloading {repo} from Hugging Face to {model_dir}")
+    snapshot_download(
+        repo_id=repo,
+        local_dir=model_dir,
+        allow_patterns=[*required, "README.md", "LICENSE.md"],
+    )
 
 
 def _iou(a, b):
@@ -85,6 +112,7 @@ def face_quality(img, box, kps, det):
 
 class FaceEngine:
     def __init__(self, db, crops_dir="data/crops", auto_enroll=True):
+        _ensure_model()
         from insightface.app import FaceAnalysis  # imported here so the server starts fast
 
         self.db = db
@@ -92,8 +120,18 @@ class FaceEngine:
         os.makedirs(crops_dir, exist_ok=True)
         self.auto_enroll = auto_enroll
         self.lock = threading.Lock()
+        # Embeddings from different models cannot be compared.
+        mpath = os.path.join(os.path.dirname(crops_dir) or ".", "model.txt")
+        saved = open(mpath).read().strip() if os.path.exists(mpath) else None
+        if saved and saved != MODEL and len(db.embeddings()[0]):
+            raise SystemExit(f"This database was built with {saved}, but BEACON_MODEL={MODEL}. "
+                             f"Use {saved}, or delete the data folder to start fresh with {MODEL}.")
+        with open(mpath, "w") as fh:
+            fh.write(MODEL)
+
         self.app = FaceAnalysis(
-            name="buffalo_l",
+            name=MODEL,
+            root=MODEL_ROOT,
             providers=["CPUExecutionProvider"],
             allowed_modules=["detection", "recognition"],
         )

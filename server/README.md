@@ -3,7 +3,7 @@
 **One line:** the glasses remember every face you pass and where you were when you passed it; when an alert comes in, they tell you if you've already seen that person, and route you back there over a map that built itself as you walked.
 
 Two engines, one record:
-- **Faces** (InsightFace/ArcFace): detect → embed → match against everyone seen so far. Strangers get an anonymous id automatically, so the *next* sighting recognizes them. Add names and notes by voice. Load an alert photo → "seen before: Coffee Station, 12 min ago".
+- **Faces** ([AuraFace v1](https://huggingface.co/fal/AuraFace-v1), run through InsightFace): detect → embed → match against everyone seen so far. Strangers get an anonymous id automatically, so the *next* sighting recognizes them. Add names and notes by voice. Load an alert photo → "seen before: Coffee Station, 12 min ago".
 - **Places** (self-building map + A*): every ~6 m of walking the camera snapshots a keyframe = a place. Places link into a graph with edge cost = distance actually walked × crowd factor. Seeing a known keyframe again = loop closure (position snaps). Routes are A* over that graph; a blocked edge reroutes live.
 
 The bridge: every sighting is stored with the place it happened at. "Where did I see her" and "take me there" are the same row in the database.
@@ -27,10 +27,10 @@ To get more pixels: stream **HIGH (720×1280)** and upload frames **without shri
 ## 1. Run it (5 minutes)
 
 ```bash
-pip install insightface onnxruntime opencv-python fastapi "uvicorn[standard]" python-multipart numpy requests scikit-image httpx
+pip install -r requirements.txt
 uvicorn server:app --host 0.0.0.0 --port 8000
 ```
-First start downloads the face models (~280 MB, from GitHub). Then open **http://localhost:8000** for the dashboard.
+First start downloads the Apache-2.0 AuraFace v1 detector and recognizer from Hugging Face into `~/.insightface/models/auraface`. Then open **http://localhost:8000** for the dashboard.
 
 Test everything with no hardware:
 ```bash
@@ -69,7 +69,7 @@ Speed: ~1.3 s/frame on a weak 2-core box; expect 150–400 ms on a laptop. Send 
 
 Printed QR codes are optional anchors: text `place:Coffee Station` = a guaranteed named place; text `blocked` held up while following a route = blocks the edge you're about to walk, and the route reroutes. Make them with any QR generator, print big (≥ 15 cm).
 
-Env flags: `BEACON_DET=640` (detector size, long side; 416 = faster, shorter range), `BEACON_MIN_FACE=18` / `BEACON_NEAR_PX=40` / `BEACON_ENROLL_PX=56` / `BEACON_FAR_MATCH=0.40` (range tiers, above), `BEACON_SCAN_TILE=1600`, `BEACON_MATCH=0.45` (match threshold), `BEACON_AUTO_ENROLL=0` (only recognize enrolled people), `BEACON_RETENTION_H=24` (forget un-annotated strangers after N hours).
+Env flags: `BEACON_MODEL=auraface` (default, downloaded from `fal/AuraFace-v1` on Hugging Face), `BEACON_MODEL=buffalo_l BEACON_DATA=data` (use the previous model and its existing fingerprints), `BEACON_DET=640` (detector size, long side; 416 = faster, shorter range), `BEACON_MIN_FACE=18` / `BEACON_NEAR_PX=40` / `BEACON_ENROLL_PX=56` / `BEACON_FAR_MATCH=0.40` (range tiers, above), `BEACON_SCAN_TILE=1600`, `BEACON_MATCH=0.45` (match threshold), `BEACON_AUTO_ENROLL=0` (only recognize enrolled people), `BEACON_RETENTION_H=24` (forget un-annotated strangers after N hours).
 
 ## 3. Glasses side (the part only you can test)
 

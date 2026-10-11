@@ -26,7 +26,7 @@ from faces import FaceEngine
 from places import PlaceMap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.environ.get("BEACON_DATA", "data")
+DATA = os.environ.get("BEACON_DATA", "data_auraface")
 RETENTION_H = float(os.environ.get("BEACON_RETENTION_H", 24))   # forget un-annotated strangers after this
 AUTO_ENROLL = os.environ.get("BEACON_AUTO_ENROLL", "1") == "1"
 SIGHTING_GAP_S = 15                                              # log a sighting at most this often per person+place

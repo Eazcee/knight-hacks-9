@@ -1,110 +1,41 @@
-"""SQLite storage for people, their training photos, sightings, places and edges.
+"""Database operations shared by Beacon's Neon repository.
 
 Everything the glasses learn lives here. Embeddings ("face fingerprints") are
-stored as raw float32 blobs, each with the photo it came from, so you can see
-and curate every person's training set.
+stored with the photo they came from so every person's training set remains
+inspectable and correctable.
 """
-import sqlite3
-import threading
 import time
+from functools import wraps
 
 import numpy as np
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS people (
-    id          TEXT PRIMARY KEY,
-    name        TEXT,
-    notes       TEXT DEFAULT '',
-    is_watch    INTEGER DEFAULT 0,
-    watch_label TEXT DEFAULT '',
-    crop        TEXT,
-    created_at  REAL,
-    last_seen   REAL
-);
-CREATE TABLE IF NOT EXISTS embeddings (
-    person_id   TEXT,
-    vec         BLOB,
-    created_at  REAL
-);
-CREATE TABLE IF NOT EXISTS sightings (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    person_id   TEXT,
-    ts          REAL,
-    node_id     INTEGER,
-    x           REAL,
-    y           REAL,
-    sim         REAL,
-    crop        TEXT
-);
-CREATE TABLE IF NOT EXISTS categories (
-    name        TEXT PRIMARY KEY,
-    sort        INTEGER DEFAULT 0,
-    created_at  REAL
-);
-CREATE TABLE IF NOT EXISTS nodes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT,
-    x           REAL,
-    y           REAL,
-    keyframe    TEXT,
-    qr          TEXT,
-    created_at  REAL,
-    visits      INTEGER DEFAULT 1
-);
-CREATE TABLE IF NOT EXISTS edges (
-    a           INTEGER,
-    b           INTEGER,
-    dist        REAL,
-    crowd       REAL DEFAULT 0,
-    blocked     INTEGER DEFAULT 0,
-    PRIMARY KEY (a, b)
-);
-"""
 
-# Columns added after the first version. Added in place so existing data survives.
-MIGRATIONS = {
-    "embeddings": {"crop": "TEXT", "quality": "REAL DEFAULT 0", "source": "TEXT DEFAULT 'auto'"},
-    "sightings": {"frame": "TEXT", "box": "TEXT", "quality": "REAL DEFAULT 0", "lat": "REAL", "lng": "REAL"},
-    "nodes": {"lat": "REAL", "lng": "REAL", "floor": "INTEGER DEFAULT 1"},
-    "people": {"met": "INTEGER DEFAULT 0", "met_at": "REAL", "met_lat": "REAL", "met_lng": "REAL", "category": "TEXT"},
-}
+def atomic(method):
+    """Keep multi-statement mutations together, including nested operations."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.transaction():
+            return method(self, *args, **kwargs)
+    return wrapped
 
+class DatabaseRepository:
+    """Backend-neutral Beacon queries implemented by the Neon adapter."""
 
-class DB:
-    def __init__(self, path="data/beacon.db"):
-        self.conn = sqlite3.connect(path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        # WAL + normal sync: commits stop waiting on the disk every time (big win on Windows)
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.lock = threading.Lock()
+    def close(self):
         with self.lock:
-            self.conn.executescript(SCHEMA)
-            for table, cols in MIGRATIONS.items():
-                have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
-                for col, typ in cols.items():
-                    if col not in have:
-                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
-            self.conn.commit()
+            self.conn.close()
 
-    # ---- helpers -------------------------------------------------------
     def _run(self, sql, args=(), fetch=None):
-        with self.lock:
-            cur = self.conn.execute(sql, args)
-            self.conn.commit()
-            if fetch == "one":
-                r = cur.fetchone()
-                return dict(r) if r else None
-            if fetch == "all":
-                return [dict(r) for r in cur.fetchall()]
-            return cur.lastrowid
+        raise NotImplementedError
 
     # ---- people --------------------------------------------------------
     def add_person(self, pid, name=None, notes="", crop=None, is_watch=0, watch_label=""):
         now = time.time()
         self._run(
-            "INSERT OR REPLACE INTO people (id,name,notes,is_watch,watch_label,crop,created_at,last_seen)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO people (id,name,notes,is_watch,watch_label,crop,created_at,last_seen)"
+            " VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET"
+            " name=excluded.name, notes=excluded.notes, is_watch=excluded.is_watch,"
+            " watch_label=excluded.watch_label, crop=excluded.crop, last_seen=excluded.last_seen",
             (pid, name, notes, is_watch, watch_label, crop, now, now),
         )
 
@@ -130,7 +61,8 @@ class DB:
         self._run(f"UPDATE people SET {cols} WHERE id=?", (*fields.values(), pid))
 
     def touch_person(self, pid, ts):
-        self._run("UPDATE people SET last_seen=MAX(COALESCE(last_seen,0), ?) WHERE id=?", (ts, pid))
+        self._run("UPDATE people SET last_seen=CASE WHEN COALESCE(last_seen,0) < ?"
+                  " THEN ? ELSE last_seen END WHERE id=?", (ts, ts, pid))
 
     def find_person_by_name(self, name):
         return self._run("SELECT * FROM people WHERE lower(name)=lower(?)", (name,), fetch="one")
@@ -144,6 +76,7 @@ class DB:
                 "emb": self._run("SELECT rowid AS rid, * FROM embeddings WHERE person_id=?", (pid,), fetch="all"),
                 "sig": self._run("SELECT * FROM sightings WHERE person_id=?", (pid,), fetch="all")}
 
+    @atomic
     def restore_person(self, snap):
         p = snap["person"]
         if self.person(p["id"]):
@@ -160,11 +93,13 @@ class DB:
             self._run(f"INSERT INTO sightings ({','.join(c3)}) VALUES ({','.join('?' * len(c3))})", tuple(r[c] for c in c3))
         return True
 
+    @atomic
     def delete_person(self, pid):
         self._run("DELETE FROM embeddings WHERE person_id=?", (pid,))
         self._run("DELETE FROM sightings WHERE person_id=?", (pid,))
         self._run("DELETE FROM people WHERE id=?", (pid,))
 
+    @atomic
     def merge_people(self, src, dst):
         """Fold person `src` into `dst`: all training photos and sightings move over.
         Returns a snapshot that undo_merge() can restore, or False."""
@@ -188,6 +123,7 @@ class DB:
         self._run("DELETE FROM people WHERE id=?", (src,))
         return snap
 
+    @atomic
     def undo_merge(self, snap):
         """Put a merged person back exactly as they were."""
         a, b = snap["src"], snap["dst"]
@@ -218,10 +154,21 @@ class DB:
 
     # ---- training photos (embeddings) ----------------------------------
     def add_embedding(self, pid, vec, crop=None, quality=0.0, source="auto"):
+        vec = self.validate_embedding(vec)
         return self._run(
             "INSERT INTO embeddings (person_id, vec, created_at, crop, quality, source) VALUES (?,?,?,?,?,?)",
             (pid, np.asarray(vec, dtype=np.float32).tobytes(), time.time(), crop, quality, source),
         )
+
+    @staticmethod
+    def validate_embedding(vec):
+        vec = np.asarray(vec, dtype=np.float32)
+        if vec.shape != (512,) or not np.isfinite(vec).all() or not np.linalg.norm(vec):
+            raise ValueError("An embedding must contain 512 finite values and have nonzero length")
+        return vec
+
+    def nearest_people(self, vec, limit=2):
+        raise NotImplementedError
 
     def embeddings(self):
         """Returns (person_ids, matrix, embedding_ids) for every stored embedding."""
@@ -281,14 +228,18 @@ class DB:
             "SELECT c.name, c.sort, (SELECT COUNT(*) FROM people p WHERE p.category=c.name) AS count"
             " FROM categories c ORDER BY c.sort, c.created_at", fetch="all")
 
+    @atomic
     def add_category(self, name):
         n = self._run("SELECT COUNT(*) AS n FROM categories", fetch="one")["n"]
-        self._run("INSERT OR IGNORE INTO categories (name, sort, created_at) VALUES (?,?,?)", (name, n, time.time()))
+        self._run("INSERT INTO categories (name, sort, created_at) VALUES (?,?,?)"
+                  " ON CONFLICT (name) DO NOTHING", (name, n, time.time()))
 
+    @atomic
     def rename_category(self, old, new):
         self._run("UPDATE categories SET name=? WHERE name=?", (new, old))
         self._run("UPDATE people SET category=? WHERE category=?", (new, old))
 
+    @atomic
     def delete_category(self, name):
         self._run("DELETE FROM categories WHERE name=?", (name,))
         self._run("UPDATE people SET category=NULL WHERE category=?", (name,))
@@ -310,6 +261,28 @@ class DB:
 
     def delete_sighting(self, sid):
         self._run("DELETE FROM sightings WHERE id=?", (sid,))
+
+    def media_paths(self):
+        """Every object-storage path currently referenced by application data."""
+        rows = self._run(
+            "SELECT crop AS path FROM people WHERE crop IS NOT NULL"
+            " UNION SELECT crop FROM embeddings WHERE crop IS NOT NULL"
+            " UNION SELECT crop FROM sightings WHERE crop IS NOT NULL"
+            " UNION SELECT frame FROM sightings WHERE frame IS NOT NULL"
+            " UNION SELECT keyframe FROM nodes WHERE keyframe IS NOT NULL",
+            fetch="all",
+        )
+        return [row["path"] for row in rows if row["path"]]
+
+    def media_path_is_referenced(self, path):
+        row = self._run(
+            "SELECT EXISTS(SELECT 1 FROM people WHERE crop=?"
+            " UNION ALL SELECT 1 FROM embeddings WHERE crop=?"
+            " UNION ALL SELECT 1 FROM sightings WHERE crop=? OR frame=?"
+            " UNION ALL SELECT 1 FROM nodes WHERE keyframe=?) AS found",
+            (path, path, path, path, path), fetch="one",
+        )
+        return bool(row and row["found"])
 
     def last_sighting(self, pid, before_ts=None):
         if before_ts is None:
@@ -374,6 +347,7 @@ class DB:
     def bump_visits(self, nid):
         self._run("UPDATE nodes SET visits=visits+1 WHERE id=?", (nid,))
 
+    @atomic
     def add_edge(self, a, b, dist, crowd=0.0):
         if a == b:
             return
@@ -390,6 +364,7 @@ class DB:
                     (u, v, dist, crowd),
                 )
 
+    @atomic
     def set_edge(self, a, b, **fields):
         cols = ", ".join(f"{k}=?" for k in fields)
         for (u, v) in ((a, b), (b, a)):
@@ -397,19 +372,3 @@ class DB:
 
     def edges(self):
         return self._run("SELECT * FROM edges", fetch="all")
-
-    def clear_map(self):
-        """Forget all places (keeps people). Sightings keep their time, lose their place."""
-        with self.lock:
-            self.conn.execute("DELETE FROM nodes")
-            self.conn.execute("DELETE FROM edges")
-            self.conn.execute("UPDATE sightings SET node_id=NULL")
-            self.conn.execute("DELETE FROM sqlite_sequence WHERE name='nodes'")
-            self.conn.commit()
-
-    def wipe(self):
-        with self.lock:
-            for t in ("people", "embeddings", "sightings", "nodes", "edges", "categories"):
-                self.conn.execute(f"DELETE FROM {t}")
-            self.conn.execute("DELETE FROM sqlite_sequence")  # place ids restart at 1
-            self.conn.commit()

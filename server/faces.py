@@ -13,8 +13,9 @@ How the "categories" work:
     with their best, most varied angles.
   * Mistakes are fixed by people, not code: merge two people, remove a bad photo.
 
-Uses InsightFace (buffalo_l). On first run it downloads ~280 MB of models to
-~/.insightface/models.
+Uses the Apache-2.0 AuraFace v1 model from Hugging Face through InsightFace.
+On first run, Hugging Face Hub downloads the detector and recognizer to
+~/.insightface/models/auraface.
 """
 import os
 import threading
@@ -72,9 +73,34 @@ def _providers():
     return ["CPUExecutionProvider"], -1
 
 
-MODEL = os.environ.get("BEACON_MODEL", "buffalo_l")   # buffalo_s = ~4x faster on CPU, a bit less accurate
+MODEL = os.environ.get("BEACON_MODEL", "auraface")
+MODEL_ROOT = os.path.expanduser(os.environ.get("BEACON_MODEL_ROOT", "~/.insightface"))
+HF_MODEL_REPOS = {"auraface": "fal/AuraFace-v1"}
 DET_SIZE = int(os.environ.get("BEACON_DET", 640))                  # detector input, long side. smaller = faster, shorter range
 SCAN_TILE = int(os.environ.get("BEACON_SCAN_TILE", 1600))          # /scan: big photos are searched in tiles this size
+
+
+def _ensure_model():
+    """Download Hugging Face model files once, into InsightFace's model layout."""
+    repo = HF_MODEL_REPOS.get(MODEL)
+    if not repo:
+        return
+    model_dir = os.path.join(MODEL_ROOT, "models", MODEL)
+    required = ("scrfd_10g_bnkps.onnx", "glintr100.onnx")
+    if all(os.path.exists(os.path.join(model_dir, name)) for name in required):
+        return
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "AuraFace requires huggingface_hub. Install server/requirements.txt first."
+        ) from exc
+    print(f"Downloading {repo} from Hugging Face to {model_dir}")
+    snapshot_download(
+        repo_id=repo,
+        local_dir=model_dir,
+        allow_patterns=[*required, "README.md", "LICENSE.md"],
+    )
 
 
 def _iou(a, b):
@@ -109,15 +135,19 @@ def face_quality(img, box, kps, det):
 
 
 class FaceEngine:
-    def __init__(self, db, crops_dir="data/crops", auto_enroll=True):
-        from insightface.app import FaceAnalysis  # imported here so the server starts fast
-
+    def __init__(self, db, crops_dir="data/crops", auto_enroll=True, media=None):
         self.db = db
+        self.media = media
         self.crops_dir = crops_dir
         os.makedirs(crops_dir, exist_ok=True)
         self.auto_enroll = auto_enroll
         self.lock = threading.Lock()
-        # embeddings from different models can't be compared: don't mix them in one database
+        if hasattr(db, "ensure_model"):
+            db.ensure_model(MODEL)
+        _ensure_model()
+        from insightface.app import FaceAnalysis  # imported here so the server starts fast
+
+        # Embeddings from different models cannot be compared; do not mix them in one database.
         mpath = os.path.join(os.path.dirname(crops_dir) or ".", "model.txt")
         saved = open(mpath).read().strip() if os.path.exists(mpath) else None
         if saved and saved != MODEL and len(db.embeddings()[0]):
@@ -128,13 +158,22 @@ class FaceEngine:
         providers, ctx = _providers()
         self.device = "GPU (" + providers[0].replace("ExecutionProvider", "") + ")" if ctx >= 0 else "CPU"
         try:
-            self.app = FaceAnalysis(name=MODEL, providers=providers, allowed_modules=["detection", "recognition"])
+            self.app = FaceAnalysis(
+                name=MODEL,
+                root=MODEL_ROOT,
+                providers=providers,
+                allowed_modules=["detection", "recognition"],
+            )
             self.app.prepare(ctx_id=ctx, det_size=(DET_SIZE, DET_SIZE))
         except Exception as e:   # GPU provider present but broken: fall back to CPU
             print("GPU init failed, using CPU:", e)
             self.device = "CPU"
-            self.app = FaceAnalysis(name=MODEL, providers=["CPUExecutionProvider"],
-                                    allowed_modules=["detection", "recognition"])
+            self.app = FaceAnalysis(
+                name=MODEL,
+                root=MODEL_ROOT,
+                providers=["CPUExecutionProvider"],
+                allowed_modules=["detection", "recognition"],
+            )
             self.app.prepare(ctx_id=-1, det_size=(DET_SIZE, DET_SIZE))
         self.device += f" · {MODEL}"
         print("Beacon face engine on", self.device)
@@ -168,7 +207,11 @@ class FaceEngine:
         return eid
 
     def _remove_from_gallery(self, eid):
+        embedding = self.db.embedding(eid)
         self.db.delete_embedding(eid)
+        if (self.media and embedding and embedding.get("crop")
+                and not self.db.media_path_is_referenced(embedding["crop"])):
+            self.media.delete(embedding["crop"])
         self._reload_gallery()
 
     def match(self, emb):
@@ -231,7 +274,11 @@ class FaceEngine:
         f = self.largest_face(img_bgr)
         if not f:
             return None
-        pid, sim = self.match(f["emb"])
+        # Uploaded enrollment/watch photos use database cosine search (pgvector on
+        # Neon). Live frames retain the fast local matrix; both use the same vectors.
+        candidates = self.db.nearest_people(f["emb"], limit=1)
+        sim = candidates[0]["sim"] if candidates else 0.0
+        pid = candidates[0]["person_id"] if candidates and sim >= MATCH_THRESHOLD else None
         matched_existing = pid is not None
         if not matched_existing:
             pid = "p_" + uuid.uuid4().hex[:6]
@@ -526,5 +573,7 @@ class FaceEngine:
         mx, my = int((x2 - x1) * 0.4), int((y2 - y1) * 0.4)
         crop = img[max(0, y1 - my):min(h, y2 + my), max(0, x1 - mx):min(w, x2 + mx)]
         path = os.path.join(self.crops_dir, f"{name}.jpg")
-        cv2.imwrite(path, crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if self.media is None:
+            raise RuntimeError("FaceEngine requires Neon Object Storage")
+        self.media.put_image(path, crop, quality=92)
         return path

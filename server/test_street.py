@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 os.environ.setdefault("BEACON_DATA", "data_test_street")
+os.environ["BEACON_STORAGE"] = "local"   # never touch a Neon database from this test
 from fastapi.testclient import TestClient  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata"))

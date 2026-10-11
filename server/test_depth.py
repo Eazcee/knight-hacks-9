@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 os.environ.setdefault("BEACON_DATA", "data_test_depth")
+os.environ["BEACON_STORAGE"] = "local"   # never touch a Neon database from this test
 os.environ.setdefault("BEACON_DEPTH", "1")      # depth is off by default now; this test turns it on
 from fastapi.testclient import TestClient  # noqa: E402
 

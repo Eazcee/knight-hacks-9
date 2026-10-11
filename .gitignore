@@ -2,6 +2,7 @@
 server/data/
 server/data_test*/
 server/data_fast/
+server/data_auraface/
 # Python
 server/.venv/
 __pycache__/
@@ -15,3 +16,11 @@ android/build/
 android/app/build/
 *.iml
 .DS_Store
+
+# Neon
+.neon
+.env.local
+.env
+.env.*
+!.env.example
+node_modules/

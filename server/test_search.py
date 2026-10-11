@@ -11,6 +11,11 @@ import time
 import cv2
 import numpy as np
 
+test_database_url = os.environ.get("BEACON_TEST_DATABASE_URL")
+if test_database_url:
+    os.environ["DATABASE_URL"] = test_database_url    # a disposable Neon branch; never production
+else:
+    os.environ["BEACON_STORAGE"] = "local"            # no Neon test branch: local SQLite + folders
 os.environ.setdefault("BEACON_DATA", "data_test_search")
 from fastapi.testclient import TestClient  # noqa: E402
 

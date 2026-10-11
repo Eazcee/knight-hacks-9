@@ -32,7 +32,7 @@
 │ places.py  keyframes → place graph → loop closure → A* with costs     │
 │ server.py  /frame pipeline, people+notes, sightings, /watch alerts,   │
 │            /route, /command, /report, /state, dashboard               │
-│ db.py      SQLite: people, embeddings, sightings, nodes, edges        │
+│ neon_database.py  Neon: people, pgvector embeddings, sightings, map   │
 └──────────────┬───────────────────────────────────────────────────────┘
                │ /state (1 Hz) · /map · /people · /alerts
 ┌──────────────▼───────────────────────────────────────────────────────┐
@@ -53,7 +53,7 @@ Nothing runs *on* the glasses. Every capability (camera, display, mic, IMU, Neur
 | display card phone → glasses (BT) | ~100–300 ms |
 | **total** | **~0.5–1.0 s** → send 2–3 fps, drop frames while busy (server already does this) |
 
-### Data model (SQLite)
+### Data model (Neon Postgres)
 - `people` (id, name, notes, is_watch, watch_label, crop, last_seen) + `embeddings` (several 512-d vectors per person, grows as new angles are seen)
 - `sightings` (person, ts, node, x, y, sim, crop) ← **the bridge table**
 - `nodes` (places: name, x, y, keyframe, qr, visits) + `edges` (a, b, dist walked, crowd, blocked)

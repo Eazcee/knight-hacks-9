@@ -20,16 +20,17 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from db import DB
+from database_config import open_database
 import faces as faces_mod
 from faces import FaceEngine
 from geo import GeoMap, haversine_m
+from media_storage import MediaNotFound, open_media
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.environ.get("BEACON_DATA", "data")
+DATA = os.environ.get("BEACON_DATA", "data_auraface")
 RETENTION_H = float(os.environ.get("BEACON_RETENTION_H", 24))   # forget un-annotated strangers after this
 AUTO_ENROLL = os.environ.get("BEACON_AUTO_ENROLL", "1") == "1"
 SIGHTING_GAP_S = 15                                              # log a sighting at most this often per person+place
@@ -46,9 +47,15 @@ FACE_W_M = 0.15              # average face width, for distance from face size
 os.makedirs(DATA, exist_ok=True)
 for d in DIRS.values():
     os.makedirs(d, exist_ok=True)
-db = DB(os.path.join(DATA, "beacon.db"))
-db.prune_anonymous(RETENTION_H * 3600)
-faces = FaceEngine(db, crops_dir=DIRS["crops"], auto_enroll=AUTO_ENROLL)
+db = open_database(DATA)
+print(f"Beacon database: {db.backend}")
+media = open_media(DATA)
+media_before_prune = set(db.media_paths())
+pruned_people = db.prune_anonymous(RETENTION_H * 3600)
+if pruned_people:
+    for stale_path in media_before_prune - set(db.media_paths()):
+        media.delete(stale_path)
+faces = FaceEngine(db, crops_dir=DIRS["crops"], auto_enroll=AUTO_ENROLL, media=media)
 geo = GeoMap(db)
 
 # depth from the single camera: off by default (BEACON_DEPTH=1: distances to people + "obstacle ahead" reroutes)
@@ -439,7 +446,7 @@ def _record(people, img, place, ts, store_scale=1.0, force=False):
                 frame_path = os.path.join(DIRS["frames"], f"f_{int(ts * 1000)}.jpg")
                 stored = img if store_scale >= 1 else cv2.resize(
                     img, (int(w * store_scale), int(h * store_scale)), interpolation=cv2.INTER_AREA)
-                cv2.imwrite(frame_path, stored, [cv2.IMWRITE_JPEG_QUALITY, 88])
+                media.put_image(frame_path, stored, quality=88)
             crop = faces._save_crop(img, p["box"], f"s_{p['person_id']}_{int(ts * 1000)}")
             box = [int(v * store_scale) for v in p["box"]] + [int(w * store_scale), int(h * store_scale)]
             plat, plng = _person_pos(p, w)
@@ -651,10 +658,9 @@ def _backfill_shots(force=False):
                 bisect.insort(cov.setdefault(r["person_id"], []), r["ts"])
         added = 0
         for frame, best in want.items():
-            if not os.path.exists(frame):
-                continue
-            img = cv2.imread(frame)
-            if img is None:
+            try:
+                img = media.get_image(frame)        # local folder or Neon Object Storage
+            except (MediaNotFound, ValueError):
                 continue
             people = []
             for r in by_frame.get(frame, []):
@@ -1052,9 +1058,12 @@ async def move_train_photo(eid: int, request: Request):
 def train_from_sighting(sid: int):
     """Add a sighting photo to that person's training set."""
     s = db.sighting(sid)
-    if not s or not s["crop"] or not os.path.exists(s["crop"]):
+    if not s or not s["crop"]:
         raise HTTPException(404)
-    img = cv2.imread(s["crop"])
+    try:
+        img = media.get_image(s["crop"])
+    except MediaNotFound:
+        raise HTTPException(404) from None
     f = faces.largest_face(img) if img is not None else None
     if not f:
         raise HTTPException(422, "couldn't find the face in that photo")
@@ -1081,7 +1090,12 @@ async def move_sighting(sid: int, request: Request):
 
 @app.delete("/sightings/{sid}")
 def delete_sighting(sid: int):
+    sighting = db.sighting(sid)
     db.delete_sighting(sid)
+    if sighting:
+        for path in (sighting.get("crop"), sighting.get("frame")):
+            if path and not db.media_path_is_referenced(path):
+                media.delete(path)
     return {"ok": True}
 
 
@@ -1940,26 +1954,32 @@ def state():
 def image(kind: str, name: str):
     if kind not in DIRS or "/" in name or "\\" in name or ".." in name:
         raise HTTPException(404)
-    path = os.path.join(DIRS[kind], name)
-    if not os.path.exists(path):
+    return _media_response(os.path.join(DIRS[kind], name))
+
+
+def _media_response(path):
+    try:
+        content = media.get_bytes(path)
+    except (MediaNotFound, ValueError):
         raise HTTPException(404)
-    return FileResponse(path, headers={"Cache-Control": "max-age=3600"})
+    return Response(content=content, media_type="image/jpeg",
+                    headers={"Cache-Control": "private, max-age=3600"})
 
 
 @app.get("/crop/{pid}.jpg")
 def crop(pid: str):
     p = db.person(pid)
-    if not p or not p["crop"] or not os.path.exists(p["crop"]):
+    if not p or not p["crop"]:
         raise HTTPException(404)
-    return FileResponse(p["crop"])
+    return _media_response(p["crop"])
 
 
 @app.get("/keyframe/{nid}.jpg")
 def keyframe(nid: int):
     n = db.node(nid)
-    if not n or not n["keyframe"] or not os.path.exists(n["keyframe"]):
+    if not n or not n["keyframe"]:
         raise HTTPException(404)
-    return FileResponse(n["keyframe"])
+    return _media_response(n["keyframe"])
 
 
 @app.post("/reset")
@@ -1968,6 +1988,7 @@ def reset():
     global last_people, last_display, last_live, last_scan
     last_scan = None
     db.wipe()
+    media.clear()
     faces._reload_gallery()
     faces.stop_training()
     geo.__init__(db)

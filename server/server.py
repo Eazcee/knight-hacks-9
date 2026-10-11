@@ -34,7 +34,8 @@ AUTO_ENROLL = os.environ.get("BEACON_AUTO_ENROLL", "1") == "1"
 SIGHTING_GAP_S = 15                                              # log a sighting at most this often per person+place
 DIRS = {k: os.path.join(DATA, k) for k in ("crops", "frames", "keyframes")}
 SETTINGS_PATH = os.path.join(DATA, "settings.json")
-DEFAULT_SETTINGS = {"convo_seconds": 30, "convo_enabled": True, "google_maps_key": "", "group_radius_m": 30}
+DEFAULT_SETTINGS = {"convo_seconds": 30, "convo_enabled": True, "google_maps_key": "", "group_radius_m": 30,
+                    "walk_min_per_mile": 16.5}
 CARD_HOLD_S = 4.0            # keep a person's card on the glasses this long after they leave view (no flicker)
 SESSION_GAP_S = 20 * 60      # without GPS, meetings more than 20 min apart are separate groups
 CONVO_GAP_S = 8              # a conversation survives looking away for this long
@@ -646,9 +647,16 @@ async def update_person(pid: str, request: Request):
 
 @app.delete("/people/{pid}")
 def delete_person(pid: str):
+    snap = db.person_snapshot(pid)
     db.delete_person(pid)
     faces._reload_gallery()
-    return {"ok": True}
+    if not snap:
+        return {"ok": True}
+    token = uuid.uuid4().hex[:10]
+    undo_log[token] = {"kind": "delete", **snap}
+    while len(undo_log) > 20:
+        undo_log.pop(next(iter(undo_log)))
+    return {"ok": True, "undo": token, "name": snap["person"]["name"] or "Unknown"}
 
 
 @app.post("/people/{pid}/merge")
@@ -672,6 +680,11 @@ async def merge_person(pid: str, request: Request):
 def undo(token: str):
     """Undo a merge (the dashboard's Undo button)."""
     snap = undo_log.pop(token, None)
+    if snap and snap.get("kind") == "delete":
+        if not db.restore_person(snap):
+            raise HTTPException(404, "nothing to undo")
+        faces._reload_gallery()
+        return {"ok": True, "person_id": snap["person"]["id"]}
     if not snap or not db.undo_merge(snap):
         raise HTTPException(404, "nothing to undo")
     faces._reload_gallery()
@@ -1162,7 +1175,7 @@ def _start_search(pid, minutes=None, speed=None):
     ls = db.last_located_sighting(pid)
     if not ls:
         raise HTTPException(404, "they were never seen at a known map position")
-    speed = float(speed or SEARCH_SPEED_MPS)
+    speed = float(speed or 1609.34 / (60.0 * float(settings.get("walk_min_per_mile", 16.5))))
     elapsed = (minutes * 60.0) if minutes else max(0.0, time.time() - ls["ts"])
     radius = max(SEARCH_MIN_M, min(SEARCH_MAX_M, speed * elapsed))
     try:
@@ -1308,6 +1321,8 @@ async def set_settings(request: Request):
         settings["convo_seconds"] = max(3, int(body["convo_seconds"]))
     if "convo_enabled" in body:
         settings["convo_enabled"] = bool(body["convo_enabled"])
+    if "walk_min_per_mile" in body:
+        settings["walk_min_per_mile"] = max(6.0, min(60.0, float(body["walk_min_per_mile"])))
     if "group_radius_m" in body:
         settings["group_radius_m"] = max(5, min(500, float(body["group_radius_m"])))
     if "google_maps_key" in body:

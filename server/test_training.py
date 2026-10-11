@@ -173,6 +173,12 @@ check(any({s["a"]["id"], s["b"]["id"]} == {a["id"], moved} for s in c.get("/sugg
 c.post(f"/people/{moved}", json={"name": "Bravo"})
 server._sugg_cache["t"] = 0
 check(not any({s["a"]["id"], s["b"]["id"]} == {a["id"], moved} for s in c.get("/suggestions").json()), "two different names are never suggested")
+r = c.delete(f"/people/{b['id']}").json()
+check(r["undo"] and c.get(f"/people/{b['id']}").status_code == 404, "deleted a person")
+c.post(f"/undo/{r['undo']}")
+back = {p["id"]: p for p in c.get("/people").json()}
+check(b["id"] in back and back[b["id"]]["n_train"] == nb and back[b["id"]]["n_seen"] == b["n_seen"] and server.faces.match(server.faces.gal_mat[server.faces.gal_ids.index(b["id"])])[0] == b["id"],
+      "undo delete: person, photos, sightings and recognition all back")
 server.settings["google_maps_key"] = "test"
 server.poi_cache["28.6024,-81.2000"] = "Harris Engineering Center"
 check(server._place_near(28.60241, -81.20012) == "Harris Engineering Center", "nearest building name from Places")

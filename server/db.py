@@ -135,6 +135,31 @@ class DB:
     def find_person_by_name(self, name):
         return self._run("SELECT * FROM people WHERE lower(name)=lower(?)", (name,), fetch="one")
 
+    def person_snapshot(self, pid):
+        """Everything about one person, so a delete can be undone."""
+        p = self.person(pid)
+        if not p:
+            return None
+        return {"person": p,
+                "emb": self._run("SELECT rowid AS rid, * FROM embeddings WHERE person_id=?", (pid,), fetch="all"),
+                "sig": self._run("SELECT * FROM sightings WHERE person_id=?", (pid,), fetch="all")}
+
+    def restore_person(self, snap):
+        p = snap["person"]
+        if self.person(p["id"]):
+            return False
+        cols = list(p.keys())
+        self._run(f"INSERT INTO people ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", tuple(p[c] for c in cols))
+        for e in snap["emb"]:
+            e = dict(e)
+            rid = e.pop("rid")
+            c2 = list(e.keys())
+            self._run(f"INSERT INTO embeddings (rowid,{','.join(c2)}) VALUES (?,{','.join('?' * len(c2))})", (rid, *[e[c] for c in c2]))
+        for r in snap["sig"]:
+            c3 = list(r.keys())
+            self._run(f"INSERT INTO sightings ({','.join(c3)}) VALUES ({','.join('?' * len(c3))})", tuple(r[c] for c in c3))
+        return True
+
     def delete_person(self, pid):
         self._run("DELETE FROM embeddings WHERE person_id=?", (pid,))
         self._run("DELETE FROM sightings WHERE person_id=?", (pid,))

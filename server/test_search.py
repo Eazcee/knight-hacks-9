@@ -89,10 +89,11 @@ c.post(f"/people/{pid}", json={"name": "Maya"})
 c.post(f"/people/{pid}/flag", params={"label": "AMBER Alert · Maya, 7"})
 frame(scene, 0, 0, dt=60)
 
-# search area for a 10-minute head start: 1.5 m/s x 600 s = 900 m
+# search area for a 10-minute head start: 1 mile per 16.5 min -> 975 m
 z = c.post(f"/search/start/{pid}", json={"minutes": 10}).json()
-inside = [b for b in FAKE if server.haversine_m(z["lat"], z["lng"], b["lat"], b["lng"]) <= 900]
-check(z["radius_m"] == 900, f"search circle: {z['radius_m']} m for 10 min on foot")
+R = 1609.34 / 16.5 * 10
+inside = [b for b in FAKE if server.haversine_m(z["lat"], z["lng"], b["lat"], b["lng"]) <= R]
+check(z["radius_m"] == round(R), f"search circle: {z['radius_m']} m for 10 min on foot (16.5 min/mile)")
 check(z["n"] == len(inside) and z["n"] > 5, f"every building inside the circle: {z['n']} (truth {len(inside)}) in {len(calls)} lookups")
 d = [b["dist"] for b in z["buildings"]]
 rings = [x // 150 for x in d]

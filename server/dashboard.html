@@ -6,6 +6,7 @@
 <title>Beacon</title>
 <link rel="stylesheet" href="/static/leaflet/leaflet.css">
 <script src="/static/leaflet/leaflet.js"></script>
+<script src="/static/three/three.min.js"></script>
 <style>
 :root{
   --bg:#0e1013; --panel:#161a1f; --panel2:#1d2229; --line:#2a313a; --text:#e8ecf1; --muted:#8b95a3;
@@ -33,6 +34,13 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .panel h2{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:0 0 10px;font-weight:600;display:flex;align-items:center;gap:8px}
 .panel h2 .right{margin-left:auto;display:flex;gap:6px}
 .top{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px}
+.d3wrap{position:relative;background:#06080b;border-radius:10px;overflow:hidden;aspect-ratio:16/10;max-height:420px}
+#d3{width:100%;height:100%;display:block;cursor:grab}
+#d3labels{position:absolute;inset:0;pointer-events:none}
+#d3labels .d3l{position:absolute;transform:translate(-50%,-100%);background:rgba(14,16,19,.85);border:1px solid #4cc38a;border-radius:6px;padding:2px 7px;font-size:12px;white-space:nowrap}
+#d3labels .d3l.watch{border-color:#ef4444;color:#ffb4b4}
+.d3empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted)}
+.obst{color:#f59e0b;font-weight:600}
 .live{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:9/16;max-height:420px;width:100%;display:flex;align-items:center;justify-content:center}
 .live img{width:100%;height:100%;object-fit:contain}
 .live .empty{color:var(--muted);padding:20px;text-align:center}
@@ -203,6 +211,12 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
         <h2>Live camera <span class="right"><small id="liveInfo" style="text-transform:none;letter-spacing:0"></small></span></h2>
         <div class="live" id="live"><div class="empty">Waiting for the glasses…<br><small>Start streaming in the Beacon app</small></div></div>
       </div>
+      <div class="panel" id="d3panel">
+        <h2>3D view <span class="muted" id="d3info" style="text-transform:none;letter-spacing:0;font-weight:400"></span>
+          <span class="right"><button class="ghost" onclick="d3reset()">Reset view</button></span></h2>
+        <div class="d3wrap"><canvas id="d3"></canvas><div id="d3labels"></div><div class="d3empty" id="d3empty">Depth appears when the glasses stream.<br><small>Drag to orbit · wheel to zoom</small></div></div>
+        <small class="muted">What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.</small>
+      </div>
       <div class="col">
         <div class="panel">
           <h2>On the glasses <span class="right"><small id="hudAgo" style="text-transform:none;letter-spacing:0"></small></span></h2>
@@ -294,7 +308,7 @@ let S=null, lastPeopleKey='', lastTlKey='', personOpen=null;
 
 async function tick(){
   try{S=await api('/state')}catch(e){return}
-  renderChips();renderLive();renderHud();renderAlerts();renderSearch();renderTrain();renderPeople();renderTimeline();drawMap();
+  renderChips();renderLive();render3D();renderHud();renderAlerts();renderSearch();renderTrain();renderPeople();renderTimeline();drawMap();
 }
 setInterval(tick,1000);tick();
 setInterval(()=>{if(S&&S.n_suggestions>0)loadSuggestions();else $('suggestions').innerHTML=''},4000);
@@ -315,7 +329,57 @@ function renderLive(){
   if(!img._loop){img._loop=true;img.onload=img.onerror=()=>setTimeout(()=>{img.src='/live.jpg?'+Date.now()},120);img.src='/live.jpg?'+Date.now()}
   const lp=S.last_people.map(p=>(p.possible?'possible ':'')+(p.name||p.watch_label||p.person_id)+' '+Math.round(p.sim*100)+'% · '+p.px+'px'+(p.tier==='far'?' (far)':''));
   if(S.far_unknown)lp.push(S.far_unknown+' too far/unclear');
+  if(S.depth&&S.depth.obstacle&&S.depth.obstacle.blocked)lp.unshift('⚠ OBSTACLE AHEAD');
   $('liveInfo').textContent=lp.join(' · ');
+}
+// ---------------- 3D view (point cloud from the depth net)
+const D3={ready:false,pts:null,geo:null,cam:null,scene:null,ren:null,az:Math.PI,el:0.35,dist:6,tgt:null,drag:null,busy:false,last:0,n:0};
+function d3init(){
+  if(D3.ready||!window.THREE)return;
+  const cv=$('d3');const wrap=cv.parentElement;
+  D3.ren=new THREE.WebGLRenderer({canvas:cv,antialias:false});D3.ren.setPixelRatio(Math.min(2,window.devicePixelRatio||1));
+  D3.scene=new THREE.Scene();D3.scene.background=new THREE.Color(0x06080b);
+  D3.cam=new THREE.PerspectiveCamera(55,16/10,0.05,200);D3.tgt=new THREE.Vector3(0,0,4);
+  const grid=new THREE.GridHelper(40,40,0x2a313a,0x1a1f26);grid.position.y=-1.6;D3.scene.add(grid);
+  // the wearer: a small cone at the origin pointing forward (+z)
+  const cone=new THREE.Mesh(new THREE.ConeGeometry(0.12,0.35,12),new THREE.MeshBasicMaterial({color:0x3b82f6}));cone.rotation.x=Math.PI/2;D3.scene.add(cone);
+  D3.geo=new THREE.BufferGeometry();
+  D3.pts=new THREE.Points(D3.geo,new THREE.PointsMaterial({size:0.07,vertexColors:true,sizeAttenuation:true}));D3.scene.add(D3.pts);
+  cv.addEventListener('mousedown',e=>{D3.drag=[e.clientX,e.clientY];cv.style.cursor='grabbing'});
+  window.addEventListener('mouseup',()=>{D3.drag=null;cv.style.cursor='grab'});
+  window.addEventListener('mousemove',e=>{if(!D3.drag)return;D3.az-=(e.clientX-D3.drag[0])*0.008;D3.el=Math.max(-1.2,Math.min(1.4,D3.el+(e.clientY-D3.drag[1])*0.006));D3.drag=[e.clientX,e.clientY];d3draw()});
+  cv.addEventListener('wheel',e=>{e.preventDefault();D3.dist=Math.max(1.5,Math.min(40,D3.dist*(e.deltaY>0?1.12:0.9)));d3draw()},{passive:false});
+  D3.ready=true;d3size();window.addEventListener('resize',d3size);
+}
+function d3size(){const cv=$('d3'),w=cv.clientWidth||600,h=cv.clientHeight||375;D3.ren.setSize(w,h,false);D3.cam.aspect=w/h;D3.cam.updateProjectionMatrix();d3draw()}
+function d3reset(){D3.az=Math.PI;D3.el=0.35;D3.dist=6;d3draw()}
+function d3draw(){
+  if(!D3.ready)return;
+  const t=D3.tgt;D3.cam.position.set(t.x+D3.dist*Math.cos(D3.el)*Math.sin(D3.az),t.y+D3.dist*Math.sin(D3.el),t.z+D3.dist*Math.cos(D3.el)*Math.cos(D3.az));
+  D3.cam.lookAt(t);D3.ren.render(D3.scene,D3.cam);
+  // name labels at each face's 3D position
+  const L=$('d3labels');const faces=(S&&S.depth&&S.depth.faces)||[];const w=$('d3').clientWidth,h=$('d3').clientHeight;
+  L.innerHTML=faces.map(f=>{const v=new THREE.Vector3(f.xyz[0],f.xyz[1]+0.15,f.xyz[2]).project(D3.cam);if(v.z>1)return '';
+    return `<div class="d3l ${f.is_watch?'watch':''}" style="left:${(v.x+1)/2*w}px;top:${(1-v.y)/2*h}px">${esc(f.name)} · ${f.dist_m} m</div>`}).join('');
+}
+async function render3D(){
+  if(!S.has_cloud){$('d3info').textContent=S.depth&&S.depth.error?'depth error: '+S.depth.error:(S.depth===null?'depth off':'');return}
+  d3init();if(!D3.ready||D3.busy)return;
+  const d=S.depth||{};
+  $('d3info').textContent=`${d.device||''} · ${d.ms||0} ms · ${d.calibrated?'scale from faces':'scale: guess (no face seen yet)'}${d.center_m?' · ahead '+d.center_m+' m':''}`+(d.obstacle&&d.obstacle.blocked?' · ':'');
+  if(d.obstacle&&d.obstacle.blocked)$('d3info').innerHTML+='<span class="obst">⚠ obstacle ahead</span>';
+  if(Date.now()-D3.last<220)return;D3.busy=true;
+  try{const r=await fetch('/cloud.bin?'+Date.now());if(!r.ok)return;const buf=await r.arrayBuffer();
+    const u=new Uint32Array(buf,0,4);if(u[0]!==0xBEAC0001)return;const n=u[1];
+    const off=16+4+8;const xyz=new Float32Array(buf.slice(off,off+n*12));const rgb=new Uint8Array(buf,off+n*12,n*3);
+    const col=new Float32Array(n*3);for(let i=0;i<n*3;i++)col[i]=rgb[i]/255;
+    D3.geo.setAttribute('position',new THREE.BufferAttribute(xyz,3));D3.geo.setAttribute('color',new THREE.BufferAttribute(col,3));
+    D3.geo.computeBoundingSphere();D3.n=n;$('d3empty').style.display='none';
+    // look at the middle of the scene (median depth), so close and far scenes both fill the view
+    const zs=[];for(let i=2;i<n*3;i+=Math.max(3,Math.floor(n/300)*3))zs.push(xyz[i]);zs.sort((a,b)=>a-b);
+    const mz=zs[Math.floor(zs.length/2)]||4;D3.tgt.z+=(Math.max(1,Math.min(10,mz))-D3.tgt.z)*0.3;
+    d3draw();
+  }catch(e){}finally{D3.busy=false;D3.last=Date.now()}
 }
 function renderHud(){
   // what the glasses show right now; when they're blank, the last card (faded) so you can see what was shown

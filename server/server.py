@@ -50,6 +50,21 @@ db.prune_anonymous(RETENTION_H * 3600)
 faces = FaceEngine(db, crops_dir=DIRS["crops"], auto_enroll=AUTO_ENROLL)
 geo = GeoMap(db)
 
+# depth (3D from the single camera): optional, BEACON_DEPTH=0 turns it off
+depth = None
+if os.environ.get("BEACON_DEPTH", "1") == "1":
+    try:
+        from depth import DepthEngine
+        _prov, _ctx = faces_mod._providers()
+        depth = DepthEngine(os.path.join(DATA, "models"), _prov, _ctx)
+    except Exception as _e:
+        print("depth disabled:", _e)
+AUTO_BLOCK = os.environ.get("BEACON_AUTO_BLOCK", "1") == "1"
+OBSTACLE_COOLDOWN_S = 20
+last_cloud = None
+last_depth = {}
+last_obstacle = {"ts": 0.0, "rerouted": False, "shown": False}
+
 
 def _load_settings():
     try:
@@ -305,6 +320,9 @@ def _build_display(people, place, alerts, next_step, train):
 
 def _nav_card(n, lines):
     """Turn-by-turn for the glasses: one instruction, the distance, what's left."""
+    warn = None
+    if time.time() - last_obstacle.get("wall", 0) < 6 and last_obstacle.get("shown"):
+        warn = "BLOCKED AHEAD · rerouting" if last_obstacle["rerouted"] else "obstacle ahead · go around"
     if n["turn"]:
         first = f"{n['turn'].upper()} · {n['dist_m']} m"
     else:
@@ -314,14 +332,16 @@ def _nav_card(n, lines):
     rest = f"{n['remaining_m']} m left · {max(1, round(n['eta_s'] / 60))} min"
     if n["remaining"] > 1:
         rest += f" · {n['remaining']} turns"
-    out = [first, rest] + lines[:1]
-    return {"level": "info", "title": f"→ {n['goal_name']}", "lines": out}
+    out = ([warn] if warn else []) + [first, rest] + lines[:1]
+    return {"level": "info", "title": f"→ {n['goal_name']}", "lines": out[:3]}
 
 
 def _person_pos(p, W):
     """Rough map position of a face: distance from its size, angle from where it is in the frame."""
     f = W / (2 * np.tan(np.radians(CAM_HFOV_DEG / 2)))
     dist = float(np.clip(f * FACE_W_M / max(8, p.get("px") or 8), 0.8, 8.0))
+    if p.get("dist_m"):
+        dist = float(np.clip(p["dist_m"], 0.5, 30.0))   # measured by the depth net
     cx = (p["box"][0] + p["box"][2]) / 2
     rel = float(np.degrees(np.arctan2(cx - W / 2, f)))
     return geo.project(dist, rel)
@@ -456,7 +476,7 @@ def _draw_live(img, people, far, scale=1.0):
             color = (90, 200, 90) if p.get("tier", "near") == "near" else (200, 170, 60)
         cv2.rectangle(live, (x1, y1), (x2, y2), color, th + (0 if p["confirmed"] else -1) or 1)
         label = ("possible " if p.get("possible") else "") + (p["name"] or p["watch_label"] or p["person_id"])
-        label += f" {int(p['sim'] * 100)}% {p.get('px', '')}px"
+        label += f" {int(p['sim'] * 100)}% {p.get('px', '')}px" + (f" {p['dist_m']}m" if p.get("dist_m") else "")
         cv2.putText(live, label, (x1, max(14, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, fs, color, th)
     ok, buf = cv2.imencode(".jpg", live, [cv2.IMWRITE_JPEG_QUALITY, 75])
     if ok:
@@ -469,8 +489,13 @@ def _pipeline(img, heading, steps, lat, lng, acc, ts):
     t0 = time.perf_counter()
     people = faces.process_frame(img, ts=ts)
     t1 = time.perf_counter()
+    obstacle = None
+    if depth is not None:
+        obstacle = _depth_step(img, people, ts)
     place = geo.observe(img, heading_deg=heading, steps=steps, lat=lat, lng=lng, acc=acc, ts=ts,
                         faces=len(people) + len(faces.last_far))
+    if obstacle and obstacle["blocked"]:
+        _maybe_auto_block(place, ts)
     _track_conversations(people, ts)
     for p in people:   # walking to someone and the camera sees them: that's the arrival
         if p["confirmed"] and not p.get("possible") and geo.found(p["person_id"]):
@@ -516,6 +541,46 @@ def _timing():
 
 
 # ---------------------------------------------------------------- scan (12 MP photo)
+def _depth_step(img, people, ts):
+    """Depth map -> real distances to people, obstacle check, point cloud for the dashboard."""
+    global last_cloud, last_depth
+    H, W = img.shape[:2]
+    try:
+        rel, color = depth.infer(img)
+    except Exception as e:
+        last_depth = {"error": str(e)[:120]}
+        return None
+    near_faces = [p for p in people if p.get("tier", "near") == "near"]
+    depth.calibrate(rel, near_faces, W, H)
+    dm = depth.metric(rel)
+    faces_3d = []
+    for p in people:
+        d = depth.distance_to(rel, p["box"], W, H)
+        if d is not None:
+            p["dist_m"] = round(d, 1)
+            faces_3d.append({"name": p["name"] or p["person_id"], "xyz": depth.face_3d(p["box"], d, W, H),
+                             "dist_m": round(d, 1), "is_watch": p["is_watch"], "met": bool((db.person(p["person_id"]) or {}).get("met"))})
+    ob = depth.obstacle(dm, people + faces.last_far, W, H)
+    last_cloud = depth.cloud(dm, color, W, H, ts, faces_3d)
+    last_depth = {"device": depth.device, "ms": round(depth.ms), "scale": None if depth.scale is None else round(depth.scale, 1),
+                  "calibrated": depth.scale is not None, "obstacle": ob, "faces": faces_3d, "ts": ts,
+                  "center_m": round(float(np.median(dm[dm.shape[0] // 3: 2 * dm.shape[0] // 3, dm.shape[1] // 3: 2 * dm.shape[1] // 3])), 1)}
+    return ob
+
+
+def _maybe_auto_block(place, ts):
+    """Something is in the way while we're following a route toward it: block that stretch, reroute."""
+    nxt = place.get("next")
+    if not AUTO_BLOCK or not geo.route or not nxt or nxt.get("rel") is None or abs(nxt["rel"]) > 45:
+        return
+    if ts - last_obstacle["ts"] < OBSTACLE_COOLDOWN_S:
+        return
+    ev = geo.block_ahead()
+    last_obstacle.update(ts=ts, wall=time.time(), rerouted=bool(ev and ev.get("rerouted")), shown=True, edge=ev)
+    place["events"].append({"type": "obstacle", "rerouted": last_obstacle["rerouted"]})
+    place["next"] = geo.next_step()
+
+
 def _current_place():
     return {"node_id": geo.current_node, "place": geo.place_name(), "next": geo.next_step()}
 
@@ -575,6 +640,14 @@ async def scan(request: Request):
         return await run_in_threadpool(_scan, img, ts)
     finally:
         pipeline_lock.release()
+
+
+@app.get("/cloud.bin")
+def cloud_bin():
+    """Latest 3D point cloud of what the glasses see (see depth.py for the layout)."""
+    if not last_cloud:
+        raise HTTPException(404, "no depth yet")
+    return Response(last_cloud, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/live.jpg")
@@ -1543,6 +1616,8 @@ def state():
         "frames": frame_count,
         "dropped": dropped,
         "has_live": last_live is not None,
+        "has_cloud": last_cloud is not None,
+        "depth": last_depth if depth is not None else None,
         "frame_size": faces.last_size,
         "timing": _timing(),
         "far_unknown": len(faces.last_far),

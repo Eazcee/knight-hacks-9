@@ -11,6 +11,9 @@ class BeaconApplication : Application() {
   lateinit var settings: Settings
     private set
 
+  lateinit var sensors: PhoneSensors
+    private set
+
   lateinit var uploader: FrameUploader
     private set
 
@@ -20,7 +23,8 @@ class BeaconApplication : Application() {
   override fun onCreate() {
     super.onCreate()
     settings = Settings(this)
-    uploader = FrameUploader(settings)
-    glasses = GlassesLink(this, uploader)
+    sensors = PhoneSensors(this)
+    uploader = FrameUploader(settings, sensors)
+    glasses = GlassesLink(this, uploader, sensors)
   }
 }

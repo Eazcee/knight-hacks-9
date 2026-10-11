@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS sightings (
     sim         REAL,
     crop        TEXT
 );
+CREATE TABLE IF NOT EXISTS categories (
+    name        TEXT PRIMARY KEY,
+    sort        INTEGER DEFAULT 0,
+    created_at  REAL
+);
 CREATE TABLE IF NOT EXISTS nodes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT,
@@ -59,7 +64,9 @@ CREATE TABLE IF NOT EXISTS edges (
 # Columns added after the first version. Added in place so existing data survives.
 MIGRATIONS = {
     "embeddings": {"crop": "TEXT", "quality": "REAL DEFAULT 0", "source": "TEXT DEFAULT 'auto'"},
-    "sightings": {"frame": "TEXT", "box": "TEXT", "quality": "REAL DEFAULT 0"},
+    "sightings": {"frame": "TEXT", "box": "TEXT", "quality": "REAL DEFAULT 0", "lat": "REAL", "lng": "REAL"},
+    "nodes": {"lat": "REAL", "lng": "REAL"},
+    "people": {"met": "INTEGER DEFAULT 0", "met_at": "REAL", "met_lat": "REAL", "met_lng": "REAL", "category": "TEXT"},
 }
 
 
@@ -67,6 +74,9 @@ class DB:
     def __init__(self, path="data/beacon.db"):
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        # WAL + normal sync: commits stop waiting on the disk every time (big win on Windows)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.lock = threading.Lock()
         with self.lock:
             self.conn.executescript(SCHEMA)
@@ -125,16 +135,45 @@ class DB:
     def find_person_by_name(self, name):
         return self._run("SELECT * FROM people WHERE lower(name)=lower(?)", (name,), fetch="one")
 
+    def person_snapshot(self, pid):
+        """Everything about one person, so a delete can be undone."""
+        p = self.person(pid)
+        if not p:
+            return None
+        return {"person": p,
+                "emb": self._run("SELECT rowid AS rid, * FROM embeddings WHERE person_id=?", (pid,), fetch="all"),
+                "sig": self._run("SELECT * FROM sightings WHERE person_id=?", (pid,), fetch="all")}
+
+    def restore_person(self, snap):
+        p = snap["person"]
+        if self.person(p["id"]):
+            return False
+        cols = list(p.keys())
+        self._run(f"INSERT INTO people ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", tuple(p[c] for c in cols))
+        for e in snap["emb"]:
+            e = dict(e)
+            rid = e.pop("rid")
+            c2 = list(e.keys())
+            self._run(f"INSERT INTO embeddings (rowid,{','.join(c2)}) VALUES (?,{','.join('?' * len(c2))})", (rid, *[e[c] for c in c2]))
+        for r in snap["sig"]:
+            c3 = list(r.keys())
+            self._run(f"INSERT INTO sightings ({','.join(c3)}) VALUES ({','.join('?' * len(c3))})", tuple(r[c] for c in c3))
+        return True
+
     def delete_person(self, pid):
         self._run("DELETE FROM embeddings WHERE person_id=?", (pid,))
         self._run("DELETE FROM sightings WHERE person_id=?", (pid,))
         self._run("DELETE FROM people WHERE id=?", (pid,))
 
     def merge_people(self, src, dst):
-        """Fold person `src` into `dst`: all training photos and sightings move over."""
+        """Fold person `src` into `dst`: all training photos and sightings move over.
+        Returns a snapshot that undo_merge() can restore, or False."""
         a, b = self.person(src), self.person(dst)
         if not a or not b or src == dst:
             return False
+        snap = {"src": a, "dst": b,
+                "emb": [r["id"] for r in self._run("SELECT rowid AS id FROM embeddings WHERE person_id=?", (src,), fetch="all")],
+                "sig": [r["id"] for r in self._run("SELECT id FROM sightings WHERE person_id=?", (src,), fetch="all")]}
         fields = {}
         if not b["name"] and a["name"]:
             fields["name"] = a["name"]
@@ -147,6 +186,21 @@ class DB:
         self._run("UPDATE embeddings SET person_id=? WHERE person_id=?", (dst, src))
         self._run("UPDATE sightings SET person_id=? WHERE person_id=?", (dst, src))
         self._run("DELETE FROM people WHERE id=?", (src,))
+        return snap
+
+    def undo_merge(self, snap):
+        """Put a merged person back exactly as they were."""
+        a, b = snap["src"], snap["dst"]
+        if self.person(a["id"]) or not self.person(b["id"]):
+            return False
+        cols = list(a.keys())
+        self._run(f"INSERT INTO people ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", tuple(a[c] for c in cols))
+        bcols = [c for c in b.keys() if c != "id"]
+        self._run(f"UPDATE people SET {', '.join(c + '=?' for c in bcols)} WHERE id=?", (*[b[c] for c in bcols], b["id"]))
+        for eid in snap["emb"]:
+            self._run("UPDATE embeddings SET person_id=? WHERE rowid=?", (a["id"], eid))
+        for sid in snap["sig"]:
+            self._run("UPDATE sightings SET person_id=? WHERE id=?", (a["id"], sid))
         return True
 
     def prune_anonymous(self, older_than_s):
@@ -205,11 +259,46 @@ class DB:
         )
 
     # ---- sightings -----------------------------------------------------
-    def add_sighting(self, pid, ts, node_id, x, y, sim, crop=None, frame=None, box=None, quality=0.0):
+    def add_sighting(self, pid, ts, node_id, x, y, sim, crop=None, frame=None, box=None, quality=0.0,
+                     lat=None, lng=None):
         return self._run(
-            "INSERT INTO sightings (person_id, ts, node_id, x, y, sim, crop, frame, box, quality)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (pid, ts, node_id, x, y, sim, crop, frame, box, quality),
+            "INSERT INTO sightings (person_id, ts, node_id, x, y, sim, crop, frame, box, quality, lat, lng)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (pid, ts, node_id, x, y, sim, crop, frame, box, quality, lat, lng),
+        )
+
+    def first_sighting(self, pid, located=False):
+        """Where/when you first saw someone (optionally the first one with a map position)."""
+        return self._run(
+            "SELECT s.*, n.name AS place FROM sightings s LEFT JOIN nodes n ON n.id=s.node_id"
+            " WHERE s.person_id=?" + (" AND s.lat IS NOT NULL" if located else "") + " ORDER BY s.ts ASC LIMIT 1",
+            (pid,), fetch="one",
+        )
+
+    # ---- categories ----------------------------------------------------
+    def categories(self):
+        return self._run(
+            "SELECT c.name, c.sort, (SELECT COUNT(*) FROM people p WHERE p.category=c.name) AS count"
+            " FROM categories c ORDER BY c.sort, c.created_at", fetch="all")
+
+    def add_category(self, name):
+        n = self._run("SELECT COUNT(*) AS n FROM categories", fetch="one")["n"]
+        self._run("INSERT OR IGNORE INTO categories (name, sort, created_at) VALUES (?,?,?)", (name, n, time.time()))
+
+    def rename_category(self, old, new):
+        self._run("UPDATE categories SET name=? WHERE name=?", (new, old))
+        self._run("UPDATE people SET category=? WHERE category=?", (new, old))
+
+    def delete_category(self, name):
+        self._run("DELETE FROM categories WHERE name=?", (name,))
+        self._run("UPDATE people SET category=NULL WHERE category=?", (name,))
+
+    def last_located_sighting(self, pid):
+        """Most recent sighting with a map position."""
+        return self._run(
+            "SELECT s.*, n.name AS place FROM sightings s LEFT JOIN nodes n ON n.id=s.node_id"
+            " WHERE s.person_id=? AND s.lat IS NOT NULL ORDER BY s.ts DESC LIMIT 1",
+            (pid,), fetch="one",
         )
 
     def sighting(self, sid):
@@ -254,10 +343,10 @@ class DB:
         )
 
     # ---- places --------------------------------------------------------
-    def add_node(self, name, x, y, keyframe=None, qr=None):
+    def add_node(self, name, x, y, keyframe=None, qr=None, lat=None, lng=None):
         return self._run(
-            "INSERT INTO nodes (name, x, y, keyframe, qr, created_at) VALUES (?,?,?,?,?,?)",
-            (name, x, y, keyframe, qr, time.time()),
+            "INSERT INTO nodes (name, x, y, keyframe, qr, created_at, lat, lng) VALUES (?,?,?,?,?,?,?,?)",
+            (name, x, y, keyframe, qr, time.time(), lat, lng),
         )
 
     def node(self, nid):
@@ -270,7 +359,11 @@ class DB:
         return self._run("SELECT * FROM nodes WHERE qr=?", (qr,), fetch="one")
 
     def node_by_name(self, name):
-        return self._run("SELECT * FROM nodes WHERE lower(name)=lower(?)", (name,), fetch="one")
+        name = (name or "").strip()
+        n = self._run("SELECT * FROM nodes WHERE lower(name)=lower(?)", (name,), fetch="one")
+        if n is None and name.lower().startswith("place ") and name[6:].strip().isdigit():
+            n = self.node(int(name[6:].strip()))
+        return n
 
     def update_node(self, nid, **fields):
         if not fields:
@@ -316,7 +409,7 @@ class DB:
 
     def wipe(self):
         with self.lock:
-            for t in ("people", "embeddings", "sightings", "nodes", "edges"):
+            for t in ("people", "embeddings", "sightings", "nodes", "edges", "categories"):
                 self.conn.execute(f"DELETE FROM {t}")
             self.conn.execute("DELETE FROM sqlite_sequence")  # place ids restart at 1
             self.conn.commit()

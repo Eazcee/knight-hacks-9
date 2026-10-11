@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Beacon</title>
+<link rel="stylesheet" href="/static/leaflet/leaflet.css">
+<script src="/static/leaflet/leaflet.js"></script>
 <style>
 :root{
   --bg:#0e1013; --panel:#161a1f; --panel2:#1d2229; --line:#2a313a; --text:#e8ecf1; --muted:#8b95a3;
@@ -44,8 +46,8 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .banner.train{background:#2a2310;border-color:#5a4a1a}
 .progress{height:6px;background:#2b2f36;border-radius:3px;overflow:hidden;flex:1;min-width:80px}
 .progress i{display:block;height:100%;background:var(--warn)}
-.people{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
-.card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:border-color .15s,transform .15s}
+.people{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+.card{position:relative;background:var(--panel2);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:border-color .15s,transform .15s}
 .card:hover{border-color:#4b5563;transform:translateY(-1px)}
 .card .ph{aspect-ratio:1;background:#0b0d10 center/cover no-repeat;position:relative}
 .card .ph .badge{position:absolute;top:6px;left:6px}
@@ -63,7 +65,42 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .tl{display:flex;gap:10px;align-items:center;padding:6px;border-radius:8px;cursor:pointer}
 .tl:hover{background:var(--panel2)}
 .tl img{width:40px;height:40px;border-radius:8px;object-fit:cover;background:#0b0d10;flex:none}
-#map{width:100%;height:320px;display:block;background:#0f1216;border-radius:10px}
+#map{width:100%;height:460px;display:block;background:#0f1216;border-radius:10px;position:relative;z-index:0}
+#mapMsg{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(14,16,19,.85);border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;z-index:400;pointer-events:none}
+.mapbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:12px;color:var(--muted)}
+.mapbar input[type=number]{width:58px;padding:3px 6px}
+.legend span{display:inline-flex;align-items:center;gap:4px;margin-right:10px}
+.legend i{width:12px;height:12px;border-radius:50%;border:3px solid #ef4444;display:inline-block}
+.legend i.g{border-color:#4cc38a}.legend i.w{border-color:#ef4444;background:#ef4444}.legend i.y{border:0;background:#3b82f6;width:12px;height:12px}
+.pinwrap{background:none;border:0}
+.node{width:10px;height:10px;border-radius:50%;background:#9fb3c8;border:1px solid #cbd5e1;box-shadow:0 0 3px #000;position:relative}
+.node.named{width:16px;height:16px;background:#3b82f6;border:2px solid #fff}
+.node .nl{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);white-space:nowrap;background:rgba(14,16,19,.9);color:#e8ecf1;border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:12px;pointer-events:none}
+.gpop{color:#1f2937;font:13px/1.4 system-ui,sans-serif;min-width:220px;max-width:300px}
+.gpop button{color:#1f2937;background:#f3f4f6;border-color:#d1d5db}.gpop button.primary{color:#06210f}
+.gpop textarea{color:#1f2937;background:#fff;border-color:#d1d5db;min-height:48px;margin-top:4px}
+.gpop .badge.watch{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+.pin{position:relative;width:46px;height:46px;border-radius:50%;border:4px solid #ef4444;overflow:hidden;background:#0b0d10;box-shadow:0 2px 8px rgba(0,0,0,.6);transition:transform .15s}
+.pin:hover{transform:scale(1.12)}
+.pin img{width:100%;height:100%;object-fit:cover;display:block}
+.pin.met{border-color:#4cc38a}
+.pin.dim{opacity:.3;filter:grayscale(.6)}
+.pin.sel{transform:scale(1.15);box-shadow:0 0 0 3px #fff,0 2px 10px rgba(0,0,0,.7)}
+.reachctl{display:inline-flex;align-items:center;gap:6px;margin-left:10px}
+.reachctl input[type=range]{width:120px;padding:0}
+.pin.watch{border-color:#ff2d2d;box-shadow:0 0 0 4px rgba(255,45,45,.35),0 2px 8px rgba(0,0,0,.6);animation:pulse 1.2s infinite}
+.pin.live::after{content:'';position:absolute;right:4px;bottom:4px;width:10px;height:10px;border-radius:50%;background:#4cc38a;border:2px solid #0b0d10}
+@keyframes pulse{0%{box-shadow:0 0 0 2px rgba(255,45,45,.5)}70%{box-shadow:0 0 0 12px rgba(255,45,45,0)}100%{box-shadow:0 0 0 2px rgba(255,45,45,0)}}
+.you{width:0;height:0;border-left:11px solid transparent;border-right:11px solid transparent;border-bottom:26px solid #3b82f6;filter:drop-shadow(0 0 4px #fff);transform-origin:50% 65%}
+.youwrap{background:none;border:0}
+.youdot{width:16px;height:16px;border-radius:50%;background:#3b82f6;border:3px solid #fff;box-shadow:0 0 6px #000}
+.leaflet-popup-content-wrapper{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px}
+.leaflet-popup-tip{background:var(--panel)}
+.leaflet-popup-content{margin:12px 14px;font:13px/1.4 system-ui,sans-serif;min-width:220px}
+.leaflet-popup-content textarea{min-height:48px;margin-top:4px}
+.leaflet-container a.leaflet-popup-close-button{color:var(--muted)}
+.leaflet-tooltip{background:rgba(14,16,19,.9);color:#e8ecf1;border:1px solid var(--line)}
+.card .ph .badge.tk{top:auto;bottom:6px;left:6px;background:#10361f;border-color:#1f5137;color:#9fe3bd}
 /* modal */
 .overlay{position:fixed;inset:0;background:rgba(5,7,9,.78);display:none;z-index:20;overflow:auto;padding:30px}
 .overlay.open{display:block}
@@ -94,6 +131,59 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .lb .nav.l{left:16px}.lb .nav.r{right:16px}
 .lb .x{position:fixed;top:16px;right:16px}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#0b2a1b;border:1px solid #1f5137;color:#c9f5dd;padding:10px 16px;border-radius:10px;display:none;z-index:60}
+.cat{margin-top:14px;border:1px dashed transparent;border-radius:12px;padding:6px;transition:border-color .1s,background .1s}
+.cat.over{border-color:var(--accent);background:rgba(76,195,138,.06)}
+.cat-h{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-weight:600}
+.cat-h .n{color:var(--muted);font-weight:400;font-size:12px}
+.cat-h button{padding:2px 8px;font-size:12px}
+.cat .people{min-height:60px}
+.card.dragging{opacity:.4}
+.card .sub2{font-size:12px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .note{color:#d6c9a3}
+.card .cacts{display:flex;gap:4px;margin-top:6px}
+.card .cacts button{flex:1;padding:3px 4px;font-size:11px}
+.card .del{position:absolute;top:6px;right:6px;z-index:2;display:none;width:26px;height:26px;padding:0;border-radius:50%;background:rgba(20,10,10,.85);border:1px solid #6b2a2a;color:#ff8a8a;font-size:14px;line-height:1}
+.card:hover .del{display:block}
+.card .del:hover{background:#ef4444;color:#fff}
+.card.over{outline:3px solid var(--warn);outline-offset:2px}
+.card .nm{cursor:text;border-radius:4px;padding:0 2px;margin:0 -2px}
+.card .nm:hover{background:#2b3240}
+.card .nm input{padding:2px 4px;font-weight:600;font-size:14px}
+.card .ph{cursor:pointer}
+.grp{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px;background:var(--panel2)}
+.grp-h{display:flex;align-items:baseline;gap:6px;margin-bottom:6px}
+.grp-h b{cursor:pointer}
+.grp-faces{display:flex;flex-wrap:wrap;gap:6px}
+.grp-faces .f{width:44px;text-align:center;cursor:pointer}
+.grp-faces img{width:40px;height:40px;border-radius:50%;object-fit:cover;border:3px solid #ef4444;background:#0b0d10;display:block;margin:0 auto}
+.grp-faces .f.met img{border-color:#4cc38a}
+.grp-faces small{display:block;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.amber-h{display:flex;align-items:center;gap:10px;margin:0 0 6px;font-size:18px;font-weight:700}
+.amber-badge{background:#f59e0b;color:#1a1200;padding:3px 10px;border-radius:6px;font-weight:800;letter-spacing:1px}
+.amber-grid{display:grid;grid-template-columns:120px 1fr;gap:14px;margin-top:14px;align-items:start}
+.amber-photo{width:120px;height:150px;border:2px dashed #4b5563;border-radius:10px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer;background:#0b0d10 center/cover no-repeat;color:var(--muted)}
+.amber-photo input{display:none}
+#undoBar{position:fixed;left:20px;bottom:20px;background:#1d2229;border:1px solid var(--line);border-radius:10px;padding:10px 14px;display:none;align-items:center;gap:12px;z-index:61;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+.srch{border-color:#6b2a2a;background:linear-gradient(180deg,#221212,var(--panel) 120px)}
+.srch .bl{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px;max-height:300px;overflow:auto;margin-top:10px}
+.srch .b{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px}
+.srch .b.done{opacity:.45;text-decoration:line-through}
+.srch .b.next{border-color:#f59e0b;box-shadow:0 0 0 1px #f59e0b inset}
+.srch .b .o{width:22px;height:22px;border-radius:50%;background:#f59e0b;color:#1a1200;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;flex:none}
+.srch .b.done .o{background:#4b5563;color:#cbd5e1}
+.srch .b .nm2{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srch .b input[type=checkbox]{width:auto;flex:none;transform:scale(1.2)}
+.bmk{width:20px;height:20px;border-radius:50%;background:#f59e0b;color:#1a1200;font:700 10px system-ui;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px #000}
+.bmk.done{background:#4b5563;color:#e5e7eb;border-color:#9ca3af}
+.bmk.next{width:26px;height:26px;font-size:12px;background:#ef4444;color:#fff;animation:wpulse 1.2s infinite}
+.lastseen{width:30px;height:30px;border-radius:50%;background:#ef4444;border:3px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font:700 13px system-ui;box-shadow:0 0 0 6px rgba(239,68,68,.3)}
+.wl{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:8px;background:var(--panel2)}
+.wl img{width:52px;height:52px;border-radius:10px;object-fit:cover;background:#0b0d10}
+.wl.in_view{border-color:#ef4444;background:#2a1414;animation:wpulse 1.2s infinite}
+@keyframes wpulse{50%{box-shadow:0 0 0 4px rgba(239,68,68,.35)}}
+.hud{aspect-ratio:1/1;max-height:300px;display:flex;flex-direction:column;justify-content:center}
+.hud.stale{opacity:.45}
+.hud .l{font-size:17px;line-height:1.35;margin-top:4px}
 @media (max-width:1100px){main{grid-template-columns:1fr}.top{grid-template-columns:1fr}}
 </style>
 </head>
@@ -102,10 +192,6 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
   <h1>BEACON</h1>
   <div class="chips" id="chips"></div>
   <div class="spacer"></div>
-  <button onclick="openTrainNew()">+ Train new person</button>
-  <button onclick="$('scanFile').click()" title="Run a big photo through Scan (what a 12 MP glasses photo does)">Scan a photo</button>
-  <input type="file" id="scanFile" accept="image/*" style="display:none" onchange="scanPhoto(this)">
-  <button onclick="openAlert()" style="border-color:#6b2a2a">Load alert photo</button>
   <button class="danger" onclick="deleteAll()">Delete all</button>
 </header>
 
@@ -119,36 +205,55 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
       </div>
       <div class="col">
         <div class="panel">
-          <h2>On the glasses</h2>
+          <h2>On the glasses <span class="right"><small id="hudAgo" style="text-transform:none;letter-spacing:0"></small></span></h2>
           <div class="hud" id="hud"></div>
         </div>
         <div class="panel">
-          <h2>Alerts <span class="right"><button onclick="api('/report',{method:'POST'}).then(r=>toast(r.say||'Reported'))">Report latest</button></span></h2>
-          <div id="alerts"><small>No alerts. Load an alert photo to start watching for someone.</small></div>
+          <h2>Watchlist <span class="right"><button onclick="openAlert()" style="border-color:#6b2a2a">+ Alert photo</button></span></h2>
+          <div id="alerts"></div>
         </div>
       </div>
     </div>
 
+    <div id="searchPanel"></div>
+
     <div class="panel">
       <h2>People <span class="muted" id="peopleCount"></span>
-        <span class="right"><small>Click a person to see and fix their photos</small></span></h2>
+        <span class="right"><button onclick="newCategory()">+ Category</button></span></h2>
+      <small class="muted">Click a name to rename. Drag a person onto a category to file them, or onto another person if they're the same person (their photos merge and recognition learns from both). Click a photo for details.</small>
       <div id="suggestions"></div>
-      <div class="people" id="people" style="margin-top:10px"></div>
+      <div id="people" style="margin-top:6px"></div>
     </div>
 
     <div class="panel">
-      <h2>Map <span class="right">
-        <button onclick="markPlace()">Mark place here</button>
-        <button onclick="api('/route',{method:'DELETE'})">Cancel route</button>
+      <h2>Map <span class="muted" id="mapInfo" style="text-transform:none;letter-spacing:0;font-weight:400"></span><span class="right">
+        <button id="followBtn" onclick="toggleFollow()">Following</button>
+        <button onclick="markPlace()" title="Name the spot you're standing at">Mark place here</button>
+        <button onclick="api('/route',{method:'DELETE'}).then(()=>toast('Route cancelled'))">Cancel route</button>
         <button class="danger" onclick="clearMap()">Clear map</button></span></h2>
-      <canvas id="map"></canvas>
-      <small>Places appear from step counts, QR anchors (<code>place:Name</code>), or "Mark place here". Click a place to rename, route, or block a path.</small>
+      <div style="position:relative"><div id="map"></div><div id="mapMsg">Waiting for GPS from the phone…</div></div>
+      <div class="mapbar">
+        <span class="legend"><span><i></i> seen</span><span><i class="g"></i> talked</span><span><i class="w"></i> alert</span><span><i class="y"></i> you</span></span>
+        <span class="spacer"></span>
+        <label><input type="checkbox" id="convoOn" onchange="saveSettings()"> green after</label>
+        <input type="number" id="convoS" min="3" step="5" onchange="saveSettings()"> s in view
+        <span class="reachctl" title="Click a person's pin to see how far they could have walked since you last saw them.">
+          ⏱ <input type="range" id="reachMin" min="0" max="120" step="1" value="0" title="Starts at the time since you last saw them; drag right to predict further ahead" oninput="reachMinutes=+this.value;drawMap()">
+          <b id="reachLbl">click a pin</b> <button id="reachFind" style="display:none;padding:2px 8px;font-size:12px" onclick="startSearch(selectedPin,Math.max(1,Math.round(reachShownMin)))">🏢 Find buildings</button>
+          · <input type="number" id="mpm" min="8" max="40" step="0.5" style="width:56px;padding:2px 5px" onchange="api('/settings',{method:'POST',json:{walk_min_per_mile:+this.value||16.5}}).then(tick)"> min/mi</span>
+        <span title="Click a pin for notes and Navigate. Click the map to navigate to a spot. Click a path to block it.">ⓘ</span>
+      </div>
+      <div class="mapbar"><span id="mapKind" class="muted"></span><span class="spacer"></span>
+        <label title="Paste a Google Maps JavaScript API key to switch the map to Google's satellite hybrid view. Leave empty for Esri imagery.">Google Maps key</label>
+        <input id="gkey" type="password" placeholder="AIza… (optional)" style="width:220px;padding:3px 6px" onkeydown="if(event.key==='Enter')saveKey()">
+        <button onclick="saveKey()">Use</button>
+      </div>
     </div>
   </div>
 
   <div class="col">
     <div class="panel">
-      <h2>Timeline</h2>
+      <h2>Met nearby <span class="right"><small style="text-transform:none;letter-spacing:0">within <input type="number" id="radius" min="5" max="500" step="5" style="width:56px;padding:2px 5px" onchange="api('/settings',{method:'POST',json:{group_radius_m:+this.value||30}}).then(tick)"> m</small></span></h2>
       <div class="timeline" id="timeline"><small>Nothing yet.</small></div>
     </div>
   </div>
@@ -165,6 +270,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
   <button class="nav r" onclick="lbStep(1)">›</button>
 </div>
 <div class="toast" id="toast"></div>
+<div id="undoBar"><span id="undoTxt"></span><button class="primary" id="undoBtn">Undo</button><button class="ghost" onclick="$('undoBar').style.display='none'">✕</button></div>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -175,6 +281,11 @@ async function api(url,opt={}){
   if(!r.ok){toast((d&&d.detail)||('Error '+r.status));throw new Error(r.status)}
   return d;
 }
+function showUndo(text,token){
+  const bar=$('undoBar');$('undoTxt').textContent=text;bar.style.display='flex';clearTimeout(bar._h);
+  $('undoBtn').onclick=async()=>{bar.style.display='none';try{await api('/undo/'+token,{method:'POST'});toast('Undone');lastPeopleKey='';loadSuggestions();tick()}catch(e){}};
+  bar._h=setTimeout(()=>bar.style.display='none',20000);
+}
 function toast(msg,ms=2600){const t=$('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',ms)}
 const qColor=q=>q>=.65?'#4cc38a':q>=.45?'#f5a524':'#ef4444';
 const label=p=>p.name||('Unknown · '+p.id);
@@ -183,7 +294,7 @@ let S=null, lastPeopleKey='', lastTlKey='', personOpen=null;
 
 async function tick(){
   try{S=await api('/state')}catch(e){return}
-  renderChips();renderLive();renderHud();renderAlerts();renderTrain();renderPeople();renderTimeline();drawMap();
+  renderChips();renderLive();renderHud();renderAlerts();renderSearch();renderTrain();renderPeople();renderTimeline();drawMap();
 }
 setInterval(tick,1000);tick();
 setInterval(()=>{if(S&&S.n_suggestions>0)loadSuggestions();else $('suggestions').innerHTML=''},4000);
@@ -194,26 +305,69 @@ function renderChips(){
   <span class="chip"><b>${S.map.nodes.length}</b> places</span><span class="chip"><b>${inView}</b> in view</span>
   ${S.dropped?`<span class="chip"><b>${S.dropped}</b> dropped</span>`:''}
   ${S.frame_size?`<span class="chip" title="Resolution the server receives. Bigger = longer range.">frame <b>${S.frame_size[0]}×${S.frame_size[1]}</b></span>`:''}
+  ${S.timing&&S.timing.fps?`<span class="chip" title="Frames the server actually processes per second, and how long each takes (${esc(S.timing.device)}). Walk-by needs 5+ fps.">${esc(S.timing.device)} <b>${S.timing.fps}</b> fps · <b>${S.timing.frame_ms}</b> ms</span>`:''}
   ${S.far_unknown?`<span class="chip" title="Faces seen but too small or unclear to name">far <b>${S.far_unknown}</b></span>`:''}`;
 }
 function renderLive(){
   if(!S.has_live)return;
   const box=$('live');let img=box.querySelector('img');
   if(!img){box.innerHTML='<img alt="live camera">';img=box.querySelector('img')}
-  img.src='/live.jpg?'+Date.now();
+  if(!img._loop){img._loop=true;img.onload=img.onerror=()=>setTimeout(()=>{img.src='/live.jpg?'+Date.now()},120);img.src='/live.jpg?'+Date.now()}
   const lp=S.last_people.map(p=>(p.possible?'possible ':'')+(p.name||p.watch_label||p.person_id)+' '+Math.round(p.sim*100)+'% · '+p.px+'px'+(p.tier==='far'?' (far)':''));
   if(S.far_unknown)lp.push(S.far_unknown+' too far/unclear');
   $('liveInfo').textContent=lp.join(' · ');
 }
 function renderHud(){
-  const d=S.display;const h=$('hud');h.className='hud'+(d.level==='alert'?' alert':'');
-  h.innerHTML=`<div class="t">${esc(d.title||'—')}</div>${(d.lines||[]).map(l=>`<div>${esc(l)}</div>`).join('')||'<div class="muted">nothing to show</div>'}`;
+  // what the glasses show right now; when they're blank, the last card (faded) so you can see what was shown
+  let d=S.display,stale=false;
+  if(d.level==='quiet'&&S.last_shown&&S.last_shown.card){d=S.last_shown.card;stale=true}
+  const h=$('hud');h.className='hud'+(d.level==='alert'?' alert':'')+(stale?' stale':'');
+  $('hudAgo').textContent=stale?'blank now · last card '+(S.last_shown.ago||''):(d.level==='quiet'?'blank':'showing now');
+  h.innerHTML=d.level==='quiet'&&!stale?'<div class="muted" style="text-align:center">Glasses display is blank.<br><small>Cards appear when someone is in view, during navigation or alerts.</small></div>'
+    :`<div class="t">${esc(d.title||'')}</div>${(d.lines||[]).map(l=>`<div class="l">${esc(l)}</div>`).join('')}`;
 }
 function renderAlerts(){
-  if(!S.alerts.length){return}
-  $('alerts').innerHTML=S.alerts.slice(0,4).map(a=>`<div class="alert-row"><div style="flex:1"><b>${esc(a.watch_label||'ALERT')}</b><br>
-  <small>${esc(a.place||'unknown place')} · ${esc(a.ago)} · match ${Math.round(a.sim*100)}%</small></div>
-  <button onclick="openPerson('${a.person_id}')">Open</button></div>`).join('');
+  const W=S.watchlist||[];
+  const key=JSON.stringify(W.map(w=>[w.id,w.status,w.last_seen_ago,w.last_place,w.dir,w.photo]));
+  if(key===renderAlerts._k)return;renderAlerts._k=key;
+  $('alerts').innerHTML=W.length?W.map(w=>{
+    const st=w.status==='in_view'?`<b style="color:#ff6b6b">IN VIEW NOW · ${esc(w.dir||'')}</b>`:
+      w.status==='possible'?`<b style="color:#f5a524">possible match · ${esc(w.dir||'')} · get closer</b>`:
+      w.status==='seen'?`last seen ${esc(w.last_seen_ago||'')}${w.last_place?' · '+esc(w.last_place):''}`:'not seen yet · watching';
+    return `<div class="wl ${w.status}"><img src="${w.photo||''}" onclick="openPerson('${w.id}')" style="cursor:pointer">
+      <div style="flex:1;min-width:0"><b>${esc(w.watch_label||w.name||'Alert')}</b><br><small>${st}</small></div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+      ${w.status!=='not_seen'?`<button onclick="navTo('${w.id}')">Navigate</button>`:''}
+      ${w.status==='seen'||w.status==='possible'?`<button style="border-color:#6b2a2a" onclick="startSearch('${w.id}')" title="Everywhere they could have walked since, and every building in it">Search area</button>`:''}
+      ${w.status==='in_view'?`<button class="primary" onclick="api('/report',{method:'POST'}).then(r=>toast(r.say||'Reported',5000))">Report</button>`:''}
+      <button class="ghost" onclick="if(confirm('Stop watching for them?'))api('/watch/${w.id}',{method:'DELETE'}).then(tick)">Clear</button></div></div>`}).join('')
+   :'<small>Nobody on the watchlist. Add an alert photo (e.g. a missing person): Beacon checks whether you already passed them, where, and alerts the glasses the moment they appear.</small>';
+}
+async function startSearch(pid,minutes){
+  toast('Finding every building they could have reached…',8000);
+  try{const r=await api('/search/start/'+pid,{method:'POST',json:minutes?{minutes:+minutes}:{}});
+    toast(`${r.n} places within ${(r.radius_m/1609).toFixed(1)} mi. Routing to the first.`,5000);renderSearch._k='';tick();
+    if(MR&&r.lat!=null){follow=false;$('followBtn').textContent='Follow';MR.setView(r.lat,r.lng,r.radius_m>1500?14:r.radius_m>600?15:17)}}catch(e){}
+}
+function renderSearch(){
+  const z=S.search;const el=$('searchPanel');
+  if(!z){if(el.innerHTML)el.innerHTML='';return}
+  const key=JSON.stringify([z.n_checked,z.target&&z.target.id,z.radius_m,z.seen_ago,z.reach_now_m]);if(key===renderSearch._k)return;renderSearch._k=key;
+  const mi=m=>(m/1609).toFixed(m<1609?2:1)+' mi';
+  el.innerHTML=`<div class="panel srch">
+    <h2><span class="amber-badge" style="font-size:11px;padding:2px 8px">SEARCH</span> <span style="text-transform:none;letter-spacing:0;color:var(--text);font-size:14px">${esc(z.label||z.name)}</span>
+      <span class="right"><button onclick="api('/search/check',{method:'POST'}).then(tick)" title="Nobody there: mark it and go to the next">Searched ✓ next</button>
+      <button onclick="api('/search/go',{method:'POST'}).then(tick)">Route to next</button>
+      <button onclick="startSearch('${z.person_id}')" title="They've had more time to walk: recompute the circle">Expand to now</button>
+      <button class="danger" onclick="api('/search',{method:'DELETE'}).then(()=>{renderSearch._k='';tick()})">End</button></span></h2>
+    <div class="row" style="gap:16px"><small>Last seen <b>${esc(z.seen_ago)}</b>${z.place?' at <b>'+esc(z.place)+'</b>':''}</small>
+      <small>Search circle <b>${mi(z.radius_m)}</b> (walking ${(z.speed*2.237).toFixed(1)} mph)${z.reach_now_m>z.radius_m*1.2?` · <span style="color:#f59e0b">could be ${mi(z.reach_now_m)} by now</span>`:''}</small>
+      <small><b>${z.n_checked}</b> of <b>${z.n}</b> places checked</small>
+      ${z.target?`<small>Next: <b>${esc(z.target.name)}</b></small>`:''}</div>
+    <div class="bl">${z.buildings.map(b=>`<div class="b ${b.checked?'done':''} ${b.next?'next':''}">
+      <span class="o">${b.order}</span><span class="nm2" title="${esc(b.name)} · ${esc(b.type||'')}">${esc(b.name)}<br><small class="muted">${b.dist} m from last seen · ${esc(b.type||'')}</small></span>
+      <button class="ghost" style="padding:2px 6px;font-size:11px" onclick="api('/search/go',{method:'POST',json:{id:'${b.id}'}}).then(tick)">Go</button>
+      <input type="checkbox" ${b.checked?'checked':''} title="Searched" onchange="api('/search/check',{method:'POST',json:{id:'${b.id}',unchecked:!this.checked}}).then(tick)"></div>`).join('')||'<small>No buildings found in this circle.</small>'}</div></div>`;
 }
 function renderTrain(){
   const t=S.train;const b=$('trainBanner');
@@ -222,24 +376,89 @@ function renderTrain(){
   <div class="progress"><i style="width:${Math.min(100,t.added/t.goal*100)}%"></i></div><span>${t.added}/${t.goal} · ${t.seconds_left}s</span>
   <button onclick="api('/train/stop',{method:'POST'})">Stop</button></div>`;
 }
+let dragging=null;
+function personCard(p,inView){
+  const live=inView.has(p.id);
+  const seen=live?'<span style="color:#4cc38a;font-weight:600">● in view now</span>'
+    :`<b>Last seen ${esc(p.last_seen_ago||'—')}</b>${p.last_seen_place?' · '+esc(p.last_seen_place):''}`;
+  const met=p.first_seen_ago?`${p.met?'Talked':'Met'} ${esc(p.first_seen_ago)}${p.met_place?' · '+esc(p.met_place):''}`:'';
+  return `<div class="card" draggable="true" data-pid="${p.id}"><button class="del" title="Delete (you can undo)" onclick="delPersonQuick(event,'${p.id}')">✕</button>
+    <div class="ph" onclick="openPerson('${p.id}')" style="background-image:url('${p.photo||''}');box-shadow:inset 0 0 0 4px ${p.met?'#4cc38a':'#ef4444'}">${p.is_watch?'<span class="badge watch badge">ALERT</span>':''}${p.met?'<span class="badge tk">talked</span>':''}${live?'<span class="live-dot" title="in view now"></span>':''}</div>
+    <div class="meta"><div class="nm" onclick="editName(event,'${p.id}')" title="Click to rename">${esc(p.name||'Unknown')}</div>
+    <div class="sub2" title="${esc((p.last_seen_place||'')+' '+(p.last_seen_ago||''))}">${seen}</div>
+    ${p.notes?`<div class="sub note" title="${esc(p.notes)}">📝 ${esc(p.notes)}</div>`:''}
+    ${met?`<div class="sub" title="${esc(met)}">${met}</div>`:''}
+    <div class="sub" title="Photos recognition compares new faces against (more angles = better). Seen = times logged.">${p.n_train||0} photos · seen ${p.n_seen||0}×${p.category?' · '+esc(p.category):''}</div>
+    <div class="cacts"><button onclick="event.stopPropagation();showOnMap('${p.id}')" title="Show where they could be now">📍 Map</button><button onclick="event.stopPropagation();navTo('${p.id}')">Navigate</button></div></div></div>`;
+}
+function showOnMap(pid){const p=S.map.pins.find(q=>q.id===pid);if(!p){toast('No map position for them yet');return}
+  follow=false;$('followBtn').textContent='Follow';selectPin(pid);MR.setView(p.lat,p.lng,17);$('map').scrollIntoView({behavior:'smooth',block:'center'})}
 function renderPeople(){
+  if(dragging||document.querySelector('.card .nm input'))return;   // don't redraw under the mouse
   const inView=new Set(S.last_people.map(p=>p.person_id));
-  const key=JSON.stringify(S.people.map(p=>[p.id,p.name,p.photo,p.n_train,p.n_seen,p.last_place,p.is_watch,inView.has(p.id),p.last_seen_ago]));
+  const cats=S.categories||[];
+  const key=JSON.stringify([cats,S.people.map(p=>[p.id,p.name,p.notes,p.photo,p.n_train,p.n_seen,p.met_place,p.first_seen_ago,p.is_watch,inView.has(p.id),p.last_seen_ago,p.met,p.category])]);
   if(key===lastPeopleKey)return;lastPeopleKey=key;
   $('peopleCount').textContent=S.people.length?`(${S.people.length})`:'';
-  $('people').innerHTML=S.people.map(p=>`<div class="card" onclick="openPerson('${p.id}')">
-    <div class="ph" style="background-image:url('${p.photo||''}')">${p.is_watch?'<span class="badge watch badge">ALERT</span>':''}${inView.has(p.id)?'<span class="live-dot" title="in view now"></span>':''}</div>
-    <div class="meta"><div class="nm">${esc(p.name||'Unknown')}</div>
-    <div class="sub">${p.n_train||0} training · seen ${p.n_seen||0}×</div>
-    <div class="sub">${esc(p.last_place||'—')} · ${esc(p.last_seen_ago||'')}</div></div></div>`).join('')||'<small>No one yet. Look at someone with the glasses on.</small>';
+  if(!S.people.length&&!cats.length){$('people').innerHTML='<small>No one yet. Look at someone with the glasses on.</small>';return}
+  const sec=(name,list,isCat)=>`<div class="cat" data-cat="${isCat?esc(name):''}">
+    <div class="cat-h">${isCat?esc(name):'Unsorted'} <span class="n">${list.length}</span>
+      ${isCat?`<button class="ghost" onclick="renameCategory('${esc(name)}')">Rename</button><button class="ghost" onclick="deleteCategory('${esc(name)}')">✕</button>`:''}</div>
+    <div class="people">${list.map(p=>personCard(p,inView)).join('')||'<small class="muted">Drag people here</small>'}</div></div>`;
+  $('people').innerHTML=cats.map(c=>sec(c.name,S.people.filter(p=>p.category===c.name),true)).join('')+
+    sec('',S.people.filter(p=>!p.category||!cats.some(c=>c.name===p.category)),false);
+  wireDnD();
 }
+function wireDnD(){
+  document.querySelectorAll('#people .card').forEach(c=>{
+    c.addEventListener('dragstart',e=>{dragging=c.dataset.pid;c.classList.add('dragging');e.dataTransfer.setData('text/plain',c.dataset.pid);e.dataTransfer.effectAllowed='move'});
+    c.addEventListener('dragend',()=>{dragging=null;c.classList.remove('dragging');document.querySelectorAll('.over').forEach(x=>x.classList.remove('over'))});
+    c.addEventListener('dragover',e=>{if(dragging&&dragging!==c.dataset.pid){e.preventDefault();e.stopPropagation();c.classList.add('over')}});
+    c.addEventListener('dragleave',()=>c.classList.remove('over'));
+    c.addEventListener('drop',async e=>{e.preventDefault();e.stopPropagation();c.classList.remove('over');
+      const src=e.dataTransfer.getData('text/plain'),dst=c.dataset.pid;if(!src||src===dst)return;
+      const a=S.people.find(p=>p.id===src),b=S.people.find(p=>p.id===dst);
+      await merge(src,dst)});
+  });
+  document.querySelectorAll('#people .cat').forEach(sec=>{
+    sec.addEventListener('dragover',e=>{if(dragging){e.preventDefault();sec.classList.add('over')}});
+    sec.addEventListener('dragleave',e=>{if(!sec.contains(e.relatedTarget))sec.classList.remove('over')});
+    sec.addEventListener('drop',async e=>{e.preventDefault();sec.classList.remove('over');const pid=e.dataTransfer.getData('text/plain');if(!pid)return;
+      await api(`/people/${pid}/category`,{method:'POST',json:{category:sec.dataset.cat||null}});lastPeopleKey='';tick()});
+  });
+}
+async function delPersonQuick(e,pid){
+  e.stopPropagation();let r;try{r=await api('/people/'+pid,{method:'DELETE'})}catch(err){return}
+  if(r.undo)showUndo(`Deleted ${r.name}`,r.undo);lastPeopleKey='';tick();
+}
+function editName(e,pid){
+  e.stopPropagation();const el=e.currentTarget;if(el.querySelector('input'))return;
+  const p=S.people.find(x=>x.id===pid);const old=p&&p.name||'';
+  el.innerHTML=`<input value="${esc(old)}" placeholder="Name">`;const inp=el.querySelector('input');inp.focus();inp.select();
+  let done=false;const finish=async save=>{if(done)return;done=true;const v=inp.value.trim();
+    el.textContent=(save?v:old)||'Unknown';
+    if(save&&v!==old){try{await api(`/people/${pid}`,{method:'POST',json:{name:v}});toast(v?'Named '+v:'Name cleared')}catch(e){}}
+    lastPeopleKey='';tick()};
+  inp.addEventListener('keydown',ev=>{if(ev.key==='Enter')finish(true);if(ev.key==='Escape')finish(false)});
+  inp.addEventListener('blur',()=>finish(true));
+  inp.addEventListener('click',ev=>ev.stopPropagation());
+}
+async function newCategory(){const n=prompt('New category (e.g. Judges, Team, Mentors):');if(!n||!n.trim())return;await api('/categories',{method:'POST',json:{name:n.trim()}});lastPeopleKey='';tick()}
+async function renameCategory(old){const n=prompt('Rename category:',old);if(!n||!n.trim()||n.trim()===old)return;await api('/categories/rename',{method:'POST',json:{old,new:n.trim()}});lastPeopleKey='';tick()}
+async function deleteCategory(name){if(!confirm(`Delete category "${name}"? Its people move to Unsorted.`))return;await api('/categories/'+encodeURIComponent(name),{method:'DELETE'});lastPeopleKey='';tick()}
 function renderTimeline(){
-  const key=JSON.stringify(S.sightings.map(s=>[s.id,s.person_name]));
-  if(key===lastTlKey){document.querySelectorAll('[data-ago]').forEach(()=>{});return}lastTlKey=key;
-  window._tl=S.sightings;
-  $('timeline').innerHTML=S.sightings.map((s,i)=>`<div class="tl" onclick="lbOpen(window._tl,${i})"><img src="${s.photo||''}" alt="">
-   <div style="min-width:0"><div><b>${esc(s.person_name||s.person_id)}</b></div><small>${esc(s.place||'no place')} · ${esc(s.ago)} · ${Math.round(s.sim*100)}%</small></div></div>`).join('')||'<small>Nothing yet.</small>';
+  const G=S.groups||[];
+  if(document.activeElement!==$('radius'))$('radius').value=S.settings.group_radius_m||30;
+  const key=JSON.stringify(G.map(g=>[g.id,g.name,g.ago,g.people.map(p=>[p.id,p.name,p.photo,p.met])]));
+  if(key===lastTlKey)return;lastTlKey=key;
+  $('timeline').innerHTML=G.length?G.map(g=>`<div class="grp">
+    <div class="grp-h"><b ${g.kind==='place'?`onclick="nameGroup(${g.lat},${g.lng},'${esc(g.named?g.name:'')}')" title="Click to name this place"`:''}>${g.kind==='place'?'📍 ':'🕒 '}${esc(g.name)}</b>
+      <small class="muted">${g.people.length} · ${esc(g.ago||'')}</small>
+      ${g.kind==='place'?`<span class="spacer"></span><button class="ghost" style="padding:1px 6px;font-size:11px" onclick="navToPoint(${g.lat},${g.lng})">Go</button>`:''}</div>
+    <div class="grp-faces">${g.people.map(p=>`<div class="f ${p.met?'met':''}" onclick="openPerson('${p.id}')" title="${esc(p.name||'Unknown')}${p.met?' · talked':''}"><img src="${p.photo||''}"><small>${esc(p.name||'?')}</small></div>`).join('')}</div>
+  </div>`).join(''):'<small>People you meet show up here, grouped by where you met them (or by time when there is no GPS).</small>';
 }
+async function nameGroup(lat,lng,cur){const n=prompt('Name this place:',cur);if(!n||!n.trim())return;await api('/groups/name',{method:'POST',json:{lat,lng,name:n.trim()}});lastTlKey='';tick()}
 async function loadSuggestions(){
   let L=[];try{L=await api('/suggestions')}catch(e){return}
   $('suggestions').innerHTML=L.length?`<div class="banner" style="flex-direction:column;align-items:stretch"><b>These might be the same person</b>
@@ -252,12 +471,14 @@ async function merge(a,b){
   // keep the one with a name, or the one with more photos
   const pa=S.people.find(p=>p.id===a),pb=S.people.find(p=>p.id===b);
   let src=a,dst=b;if(pa&&pb&&((pa.name&&!pb.name)||(!pa.name===!pb.name&&(pa.n_train||0)>(pb.n_train||0)))){src=b;dst=a}
-  await api(`/people/${src}/merge`,{method:'POST',json:{into:dst}});toast('Merged');lastPeopleKey='';loadSuggestions();
+  let r;try{r=await api(`/people/${src}/merge`,{method:'POST',json:{into:dst}})}catch(e){return}
+  showUndo(`Merged ${r.src_name} into ${r.dst_name}`,r.undo);lastPeopleKey='';loadSuggestions();tick();
   if(personOpen)openPerson(dst);
 }
 
 // ---------------- person page
 async function openPerson(pid){
+  selectedPin=pid;
   personOpen=pid;let d;try{d=await api(`/people/${pid}/photos`)}catch(e){return}
   const p=d.person;window._train=d.training.map(t=>({...t,kind:'train'}));window._sight=d.sightings;
   const others=S.people.filter(o=>o.id!==pid);
@@ -267,13 +488,15 @@ async function openPerson(pid){
     <div class="big" style="background-image:url('${p.photo||''}')" onclick="window._train.length?lbOpen(window._train,0):(window._sight.length&&lbOpen(window._sight,0))"></div>
     <div>
       <div class="row" style="margin-bottom:8px"><span class="badge">${esc(p.id)}</span>${p.is_watch?`<span class="badge watch">${esc(p.watch_label||'ALERT')}</span>`:''}
-        <small>last seen ${esc(p.last_place||'—')} · ${esc(p.last_seen_ago||'never')}</small></div>
+        ${p.met?'<span class="badge" style="background:#10361f;border-color:#1f5137;color:#9fe3bd">talked</span>':''}
+        <small>last seen ${esc(p.last_place||'—')} · ${esc(p.last_seen_ago||'never')}${p.lat?' · on map':''}</small></div>
       <div class="row" style="flex-wrap:nowrap;gap:12px"><div style="flex:1"><small>Name</small><input id="pName" value="${esc(p.name||'')}" placeholder="Who is this?"></div></div>
       <div style="margin-top:8px"><small>Notes</small><textarea id="pNotes" placeholder="What should the glasses show when you see them?">${esc(p.notes||'')}</textarea></div>
       <div class="row" style="margin-top:10px">
         <button class="primary" onclick="savePerson('${pid}')">Save</button>
         <button onclick="trainPerson('${pid}')" title="Look at them through the glasses while they turn their head">Train 20 s</button>
-        <button onclick="api('/route?to_person=${pid}').then(r=>toast(r.ok?'Route: '+r.cost_m+' m':'No route: '+r.reason)).catch(()=>{})">Route to last sighting</button>
+        <button onclick="navTo('${pid}')">Navigate to them</button>
+        <button onclick="api('/people/${pid}/met',{method:'POST',json:{met:${p.met?'false':'true'}}}).then(()=>{lastPeopleKey='';openPerson('${pid}')})">${p.met?'Talked ✓ (undo)':'Mark as talked'}</button>
         ${p.is_watch?`<button onclick="api('/watch/${pid}',{method:'DELETE'}).then(()=>openPerson('${pid}'))">Clear alert</button>`:`<button onclick="markAlert('${pid}')">Mark as alert</button>`}
         <select onchange="if(this.value){merge('${pid}',this.value)}" style="width:auto"><option value="">Merge into…</option>${others.map(o=>`<option value="${o.id}">${esc(label(o))}</option>`).join('')}</select>
         <button class="danger" onclick="delPerson('${pid}')">Delete person</button>
@@ -314,25 +537,31 @@ async function markAlert(pid){const l=prompt('Alert label (e.g. "AMBER Alert · 
 async function openTrainNew(){const n=prompt('Name of the person to train (they should face the glasses):');if(n===null)return;
   await api('/train/start',{method:'POST',json:{name:n,seconds:20,goal:10}});toast('Training '+(n||'new person'))}
 function openAlert(){
-  $('alertModal').innerHTML=`<button class="close" onclick="closeAlert()">Close</button><h3 style="margin-top:0">Load an alert photo</h3>
-  <small>A missing-person photo. Beacon checks whether the glasses have already seen them, and alerts the wearer if they appear.</small>
-  <div style="margin-top:12px"><small>Label</small><input id="aLabel" value="AMBER Alert · "></div>
-  <div style="margin-top:10px"><input type="file" id="aFile" accept="image/*"></div>
-  <div class="row" style="margin-top:12px"><button class="primary" onclick="sendAlert()">Check &amp; start watching</button></div>
+  $('alertModal').innerHTML=`<button class="close" onclick="closeAlert()">Close</button>
+  <div class="amber-h"><span class="amber-badge">AMBER ALERT</span><span>Missing person</span></div>
+  <small class="muted">Beacon checks whether your glasses have already passed this person (where and when), then alerts the glasses the moment they appear.</small>
+  <div class="amber-grid">
+    <label class="amber-photo" id="aPhotoBox"><input type="file" id="aFile" accept="image/*" onchange="previewAlert(this)"><span id="aPhotoTxt">+ Photo<br><small>required</small></span></label>
+    <div>
+      <small>Full name <b style="color:#ff8a8a">*</b></small><input id="aName" placeholder="e.g. Maya Johnson" autocomplete="off">
+      <div class="row" style="margin-top:8px;flex-wrap:nowrap">
+        <div style="width:90px"><small>Age</small><input id="aAge" placeholder="7"></div>
+        <div style="flex:1"><small>Description / last seen wearing</small><input id="aDesc" placeholder="red hoodie, blue backpack"></div>
+      </div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px"><button class="primary" style="background:#ef4444;border-color:#ef4444;color:#fff" onclick="sendAlert()">Issue alert &amp; check sightings</button></div>
   <div id="aResult" style="margin-top:14px"></div>`;
-  $('alertOverlay').classList.add('open');
+  $('alertOverlay').classList.add('open');setTimeout(()=>$('aName').focus(),50);
 }
+function previewAlert(inp){const f=inp.files[0];if(!f)return;const u=URL.createObjectURL(f);
+  $('aPhotoBox').style.backgroundImage=`url('${u}')`;$('aPhotoTxt').style.display='none'}
 function closeAlert(){$('alertOverlay').classList.remove('open')}
-async function scanPhoto(inp){
-  const f=inp.files[0];inp.value='';if(!f)return;toast('Scanning…');
-  const fd=new FormData();fd.append('image',f);
-  let r;try{r=await api('/scan',{method:'POST',body:fd})}catch(e){return}
-  toast(`${r.display.title} · ${r.display.lines.join(' · ')} (${r.size[0]}×${r.size[1]}, ${(r.ms/1000).toFixed(1)} s)`,9000);
-  tick();
-}
 async function sendAlert(){
-  const f=$('aFile').files[0];if(!f){toast('Pick a photo first');return}
-  const fd=new FormData();fd.append('image',f);fd.append('label',$('aLabel').value||'ALERT');
+  const name=$('aName').value.trim(),f=$('aFile').files[0];
+  if(!name){toast('Enter the person\'s name');$('aName').focus();return}
+  if(!f){toast('Add a photo of them');return}
+  const fd=new FormData();fd.append('image',f);fd.append('name',name);fd.append('age',$('aAge').value.trim());fd.append('description',$('aDesc').value.trim());
   let r;try{r=await api('/watch',{method:'POST',body:fd})}catch(e){return}
   const last=r.last;
   $('aResult').innerHTML=r.seen_before&&last?`<div class="banner" style="background:#2a1414;border-color:#6b2a2a;flex-wrap:wrap">
@@ -365,50 +594,208 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){closePerson();closeAlert()}
 });
 
-// ---------------- map
-const cv=$('map'),ctx=cv.getContext('2d');let MP=null;
-function fit(){const r=cv.getBoundingClientRect(),dpr=window.devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
-window.addEventListener('resize',()=>{fit();if(S)drawMap()});fit();
-function layout(){
-  const m=S.map,W=cv.clientWidth,H=cv.clientHeight,pad=40;let pts=m.nodes.map(n=>({id:n.id,x:n.x,y:n.y}));
-  const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
-  const spread=pts.length?Math.max(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys)):0;
-  if(pts.length>1&&spread<1.5){pts=pts.map((p,i)=>({id:p.id,x:Math.cos(i/pts.length*2*Math.PI)*5,y:Math.sin(i/pts.length*2*Math.PI)*5}))}
-  const all=pts.concat(spread<1.5?[]:[{x:m.position.x,y:m.position.y}]);
-  const minx=Math.min(...all.map(p=>p.x),0)-1,maxx=Math.max(...all.map(p=>p.x),0)+1,miny=Math.min(...all.map(p=>p.y),0)-1,maxy=Math.max(...all.map(p=>p.y),0)+1;
-  const sc=Math.min((W-2*pad)/(maxx-minx||1),(H-2*pad)/(maxy-miny||1));
-  const ox=(W-(maxx-minx)*sc)/2,oy=(H-(maxy-miny)*sc)/2;
-  const P=(x,y)=>[ox+(x-minx)*sc,H-(oy+(y-miny)*sc)];
-  const pos={};const taken=[];
-  pts.forEach(p=>{let [x,y]=P(p.x,p.y);let k=0;   // nudge places that sit on top of each other
-    while(taken.some(t=>Math.hypot(t[0]-x,t[1]-y)<16)&&k<12){k++;x+=Math.cos(k*2.4)*22;y+=Math.sin(k*2.4)*22}
-    taken.push([x,y]);pos[p.id]=[x,y]});
-  return {pos,P,fallback:spread<1.5};
+// ---------------- map: two renderers (Leaflet + Esri tiles by default; Google Maps when a key is saved)
+let selectedPin=null,reachMinutes=0,reachShownMin=0;
+function selectPin(pid){if(pid!==selectedPin)reachMinutes=0;selectedPin=pid;drawMap()}
+let follow=true,mapReady=false,centered=false,MR=null,gmapsTried=false,mapInitStarted=false;
+const PIN_HTML=(p,off)=>`<div class="pinoff" style="transform:translate(${off[0]}px,${off[1]}px)"><div class="pin ${p.met?'met':''} ${p.is_watch?'watch':''} ${p.in_view?'live':''} ${selectedPin&&selectedPin!==p.id?'dim':''} ${selectedPin===p.id?'sel':''}" title="${esc(p.name||'Unknown')}"><img src="${p.photo||''}" alt=""></div></div>`;
+const YOU_HTML=pos=>pos.heading!=null?`<div class="you" style="transform:rotate(${pos.heading}deg)"></div>`:'<div class="youdot"></div>';
+const NODE_HTML=n=>`<div class="node ${n.named?'named':''}" title="${esc(n.name)}">${n.named?`<span class="nl">${esc(n.name)}</span>`:''}</div>`;
+
+// --- Leaflet backend
+const LeafletMap={
+  layers:{},map:null,
+  init(onDrag,onClick){
+    if(!window.L)return false;
+    this.map=L.map('map',{zoomControl:true}).setView([28.6024,-81.2001],17);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:22,maxNativeZoom:19,attribution:'Tiles © Esri'}).addTo(this.map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:22,maxNativeZoom:19,opacity:.9}).addTo(this.map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:22,maxNativeZoom:19}).addTo(this.map);
+    this.map.on('dragstart',onDrag);this.map.on('click',e=>onClick(e.latlng.lat,e.latlng.lng));
+    return true;
+  },
+  setView(lat,lng,z){this.map.setView([lat,lng],z)},panTo(lat,lng){this.map.panTo([lat,lng],{animate:false})},
+  closePopup(){this.map.closePopup()},
+  popup(lat,lng,html,anchorLayer){L.popup({maxWidth:320}).setLatLng([lat,lng]).setContent(html).openOn(this.map)},
+  marker(id,lat,lng,o){
+    const w=o.w||46,h=o.h||46;let m=this.layers[id];
+    if(!m){m=L.marker([lat,lng],{icon:L.divIcon({className:'pinwrap',iconSize:[w,h],iconAnchor:[w/2,h/2],html:o.html}),zIndexOffset:o.z||0}).addTo(this.map);m._key=o.html;
+      m.on('click',ev=>{L.DomEvent.stop(ev);const oo=m._opts;if(oo.onClick)oo.onClick();else if(oo.popupHtml)L.popup({maxWidth:320,offset:[0,-(h/2)]}).setLatLng(m.getLatLng()).setContent(oo.popupHtml()).openOn(this.map)});
+      this.layers[id]=m}
+    else{m.setLatLng([lat,lng]);if(m._key!==o.html){m.setIcon(L.divIcon({className:'pinwrap',iconSize:[w,h],iconAnchor:[w/2,h/2],html:o.html}));m._key=o.html}m.setZIndexOffset(o.z||0)}
+    m._opts=o;
+  },
+  circle(id,lat,lng,r,o){let c=this.layers[id];const st={color:o.color,weight:o.weight||1,fillColor:o.color,fillOpacity:o.fill||.08,opacity:o.opacity||.8};
+    if(!c){c=L.circle([lat,lng],{radius:r,...st}).addTo(this.map);this.layers[id]=c}else{c.setLatLng([lat,lng]);c.setRadius(r);c.setStyle(st)}},
+  polyline(id,pts,o){let l=this.layers[id];const st={color:o.color,weight:o.weight||3,opacity:o.opacity||.9,dashArray:o.dash?(o.dash===true?'8 10':o.dash):null};
+    if(!l){l=L.polyline(pts,st).addTo(this.map);if(o.tooltip)l.bindTooltip(o.tooltip,{sticky:true});
+      l.on('click',ev=>{L.DomEvent.stop(ev);if(l._opts.onClick)l._opts.onClick()});this.layers[id]=l}
+    else{l.setLatLngs(pts);l.setStyle(st);if(o.tooltip){if(l.getTooltip())l.setTooltipContent(o.tooltip);else l.bindTooltip(o.tooltip,{sticky:true})}}
+    l._opts=o;
+  },
+  remove(id){const x=this.layers[id];if(x){x.remove();delete this.layers[id]}},
+};
+
+// --- Google Maps backend (satellite "hybrid" view). Needs a Maps JavaScript API key saved in the map bar.
+const GoogleMap={
+  layers:{},map:null,iw:null,
+  init(onDrag,onClick){
+    if(!(window.google&&google.maps&&google.maps.Map))return false;
+    this.map=new google.maps.Map($('map'),{center:{lat:28.6024,lng:-81.2001},zoom:17,mapTypeId:'hybrid',mapId:'DEMO_MAP_ID',
+      streetViewControl:false,fullscreenControl:false,mapTypeControl:true,rotateControl:false,tilt:0,gestureHandling:'greedy',
+      mapTypeControlOptions:{mapTypeIds:['hybrid','satellite','roadmap']}});
+    this.iw=new google.maps.InfoWindow();
+    this.map.addListener('dragstart',onDrag);
+    this.map.addListener('click',e=>onClick(e.latLng.lat(),e.latLng.lng()));
+    return true;
+  },
+  setView(lat,lng,z){this.map.setCenter({lat,lng});if(z)this.map.setZoom(z)},panTo(lat,lng){this.map.panTo({lat,lng})},
+  closePopup(){if(this.iw)this.iw.close()},
+  _content(html,w,h){const c=document.createElement('div');c.style.cssText=`width:${w}px;height:${h}px;transform:translateY(${h/2}px)`;c.innerHTML=html;return c},
+  popup(lat,lng,html,anchor){this.iw.close();const d=document.createElement('div');d.className='gpop';d.innerHTML=html;this.iw.setContent(d);
+    if(anchor){this.iw.setOptions({pixelOffset:new google.maps.Size(0,-((anchor._h||46)/2))});this.iw.open({map:this.map,anchor})}
+    else{this.iw.setOptions({pixelOffset:new google.maps.Size(0,0)});this.iw.setPosition({lat,lng});this.iw.open({map:this.map})}},
+  marker(id,lat,lng,o){
+    const w=o.w||46,h=o.h||46;let m=this.layers[id];
+    if(!m){m=new google.maps.marker.AdvancedMarkerElement({map:this.map,position:{lat,lng},content:this._content(o.html,w,h),zIndex:o.z||0,title:o.title||'',gmpClickable:true});
+      m._key=o.html;m._h=h;m.addListener('click',()=>{const oo=m._opts;if(oo.onClick)oo.onClick();else if(oo.popupHtml)this.popup(lat,lng,oo.popupHtml(),m)});this.layers[id]=m}
+    else{m.position={lat,lng};if(m._key!==o.html){m.content=this._content(o.html,w,h);m._key=o.html}m.zIndex=o.z||0}
+    m._opts=o;
+  },
+  circle(id,lat,lng,r,o){let c=this.layers[id];const st={strokeColor:o.color,strokeWeight:o.weight||1,strokeOpacity:o.opacity||.8,fillColor:o.color,fillOpacity:o.fill||.08,clickable:false};
+    if(!c){c=new google.maps.Circle({map:this.map,center:{lat,lng},radius:r,...st});this.layers[id]=c}else{c.setCenter({lat,lng});c.setRadius(r);c.setOptions(st)}},
+  polyline(id,pts,o){let l=this.layers[id];const path=pts.map(p=>({lat:p[0],lng:p[1]}));
+    const st={strokeColor:o.color,strokeWeight:o.weight||3,strokeOpacity:o.dash?0:(o.opacity||.9),zIndex:o.z||1,
+      icons:o.dash?[{icon:{path:'M 0,-1 0,1',strokeOpacity:o.opacity||.9,strokeColor:o.color,strokeWeight:o.weight||3,scale:1},offset:'0',repeat:'14px'}]:null};
+    if(!l){l=new google.maps.Polyline({map:this.map,path,...st});
+      l.addListener('click',()=>{if(l._opts.onClick)l._opts.onClick()});
+      l.addListener('mouseover',e=>{if(l._opts.tooltip){this.iw.close();this.iw.setOptions({pixelOffset:new google.maps.Size(0,-6)});this.iw.setContent('<small>'+l._opts.tooltip+'</small>');this.iw.setPosition(e.latLng);this.iw.open({map:this.map});this._tip=true}});
+      l.addListener('mouseout',()=>{if(this._tip){this.iw.close();this._tip=false}});
+      this.layers[id]=l}
+    else{l.setPath(path);l.setOptions(st)}
+    l._opts=o;
+  },
+  remove(id){const x=this.layers[id];if(x){if(x.setMap)x.setMap(null);else x.map=null;delete this.layers[id]}},
+};
+
+function initMap(){
+  const onDrag=()=>{follow=false;$('followBtn').textContent='Follow'};
+  const onClick=(lat,lng)=>{if(selectedPin){selectedPin=null;reachMinutes=0;drawMap();return}MR.popup(lat,lng,`<b>${lat.toFixed(5)}, ${lng.toFixed(5)}</b><div class="row" style="margin-top:8px"><button onclick="navToPoint(${lat},${lng})">Navigate here</button></div>`)};
+  MR=null;
+  if(window.google&&google.maps&&google.maps.Map&&GoogleMap.init(onDrag,onClick)){MR=GoogleMap;$('mapKind').textContent='Google Maps'}
+  else if(LeafletMap.init(onDrag,onClick)){MR=LeafletMap;$('mapKind').textContent='Esri imagery'}
+  if(!MR){$('mapMsg').textContent='Map library did not load';return}
+  mapReady=true;centered=false;
 }
+function loadGoogleMaps(key){
+  if(gmapsTried||!key)return;gmapsTried=true;
+  const fallback=msg=>{toast(msg,8000);if(MR===GoogleMap){GoogleMap.layers={}}$('map').innerHTML='';window.google=undefined;mapReady=false;initMap()};
+  window.gmapsReady=()=>{if(mapReady&&MR===LeafletMap){LeafletMap.map.remove();LeafletMap.layers={};$('map').innerHTML='';mapReady=false}initMap()};
+  window.gm_authFailure=()=>fallback('Google Maps rejected the key (it must be a Maps JavaScript API key on a project with the free trial / billing active). Using Esri imagery.');
+  const sc=document.createElement('script');sc.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&libraries=marker&loading=async&callback=gmapsReady`;
+  sc.onerror=()=>fallback('Could not load Google Maps (no internet?). Using Esri imagery.');
+  document.head.appendChild(sc);
+  setTimeout(()=>{if(!mapReady)fallback('Google Maps is taking too long. Using Esri imagery.')},12000);
+}
+function toggleFollow(){follow=!follow;$('followBtn').textContent=follow?'Following':'Follow';if(follow&&S&&S.map.position.lat&&MR)MR.panTo(S.map.position.lat,S.map.position.lng)}
+function fanOut(pins){
+  // people seen at the same spot would stack exactly on top of each other: spread them in a ring (pixels, so it works at any zoom)
+  const off={};const groups=[];
+  pins.forEach(p=>{let g=groups.find(g=>Math.hypot((g.lat-p.lat)*110540,(g.lng-p.lng)*111320*Math.cos(g.lat*Math.PI/180))<3);
+    if(g){g.items.push(p)}else{groups.push({lat:p.lat,lng:p.lng,items:[p]})}});
+  groups.forEach(g=>{const n=g.items.length;if(n===1){off[g.items[0].id]=[0,0];return}
+    const r=n<=6?30:30+(n-6)*4;g.items.forEach((p,i)=>{const a=-Math.PI/2+i*2*Math.PI/n;off[p.id]=[Math.round(r*Math.cos(a)),Math.round(r*Math.sin(a))]})});
+  return off;
+}
+function pinPopup(p){
+  return `<div style="display:flex;gap:10px;align-items:center"><img src="${p.photo||''}" style="width:54px;height:54px;border-radius:10px;object-fit:cover">
+   <div><b style="font-size:15px">${esc(p.name||'Unknown')}</b>${p.is_watch?' <span class="badge watch">ALERT</span>':''}<br>
+   <small>${p.met?'<span style="color:#4cc38a">talked</span>':'<span style="color:#ff8a8a">seen</span>'} · ${esc(p.last_seen_ago||'')}${p.in_view?' · in view':''}</small></div></div>
+   <textarea id="pn_${p.id}" placeholder="Note to remember them by…">${esc(p.notes||'')}</textarea>
+   <div class="row" style="margin-top:6px"><button class="primary" onclick="saveNote('${p.id}')">Save note</button>
+   <button onclick="navTo('${p.id}')">Navigate</button><button class="ghost" onclick="openPerson('${p.id}')">Open</button></div>
+   <div class="row" style="margin-top:6px"><button style="width:100%;border-color:#6b2a2a" onclick="MR.closePopup();startSearch('${p.id}',selectedPin==='${p.id}'?Math.max(1,Math.round(reachShownMin)):0)" title="Every main building inside their bubble, in search order, with a route to the first">🏢 Find buildings they could be in</button></div>`;
+}
+async function saveNote(pid){const t=$('pn_'+pid);if(!t)return;await api(`/people/${pid}`,{method:'POST',json:{notes:t.value}});toast('Note saved');lastPeopleKey=''}
+async function navTo(pid){try{const r=await api('/route?to_person='+pid);toast(r.ok?`Navigating: ${r.remaining_m} m ${r.mode==='compass'?'(direct, no walked path yet)':'along walked paths'}`:'No route: '+r.reason);MR&&MR.closePopup()}catch(e){}}
+async function navToPoint(lat,lng){try{const r=await api(`/route?lat=${lat}&lng=${lng}`);toast(r.ok?`Navigating: ${r.remaining_m} m`:'No route');MR&&MR.closePopup()}catch(e){}}
+function nodePopup(n){return `<b>${esc(n.name)}</b><br><small>${n.named?'named place':'auto place'} · ${n.visits||1} visit${(n.visits||1)!==1?'s':''}</small>
+  <div class="row" style="margin-top:8px"><button onclick="api('/route?to=${n.id}').then(r=>toast(r.ok?'Navigating: '+r.remaining_m+' m':'No route'));MR.closePopup()">Navigate</button>
+  <button onclick="renameNode(${n.id},'${esc(n.named?n.name:'')}')">Rename</button></div>`}
+async function renameNode(id,cur){const n=prompt('Name this place:',cur);if(n===null)return;await api('/nodes/'+id,{method:'POST',json:{name:n}});MR.closePopup();toast('Renamed')}
 function drawMap(){
-  const m=S.map,W=cv.clientWidth,H=cv.clientHeight;ctx.clearRect(0,0,W,H);
-  if(!m.nodes.length){ctx.fillStyle='#8b95a3';ctx.font='13px system-ui';ctx.fillText('No places yet. Walk with step counts on, scan a place: QR code, or press "Mark place here".',16,28);MP=null;return}
-  MP=layout();const {pos}=MP;
-  const onRoute=(a,b)=>m.route&&Math.abs(m.route.indexOf(a)-m.route.indexOf(b))===1&&m.route.includes(a)&&m.route.includes(b);
-  m.edges.forEach(e=>{if(e.a>e.b)return;const a=pos[e.a],b=pos[e.b];if(!a||!b)return;
-    ctx.lineWidth=onRoute(e.a,e.b)?4:2;ctx.strokeStyle=e.blocked?'#ef4444':onRoute(e.a,e.b)?'#4cc38a':'#3a4350';ctx.setLineDash(e.blocked?[6,6]:[]);
-    ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();ctx.setLineDash([]);
-    ctx.fillStyle='#6b7684';ctx.font='11px system-ui';ctx.fillText((e.dist*(1+e.crowd)).toFixed(0)+' m',(a[0]+b[0])/2+4,(a[1]+b[1])/2-4)});
-  m.nodes.forEach(n=>{const [x,y]=pos[n.id];const cur=n.id===m.current_node,goal=n.id===m.route_goal;
-    ctx.fillStyle=cur?'#4cc38a':goal?'#f5a524':'#3b82f6';ctx.beginPath();ctx.arc(x,y,cur?9:7,0,7);ctx.fill();
-    ctx.fillStyle='#e8ecf1';ctx.font='12px system-ui';ctx.fillText(n.name,x+12,y+4)});
+  if(!mapInitStarted){mapInitStarted=true;if(S.settings&&S.settings.google_maps_key)loadGoogleMaps(S.settings.google_maps_key);else initMap()}
+  if(document.activeElement!==$('convoS')){$('convoS').value=S.settings.convo_seconds;$('convoOn').checked=!!S.settings.convo_enabled}
+  if(document.activeElement!==$('gkey'))$('gkey').value=S.settings.google_maps_key||'';
+  if(document.activeElement!==$('mpm'))$('mpm').value=S.settings.walk_min_per_mile||16.5;
+  if(!mapReady)return;
+  const m=S.map,pos=m.position;
+  if(pos.lat==null){$('mapMsg').style.display='block';$('mapMsg').textContent='Waiting for GPS from the phone…';}
+  else{$('mapMsg').style.display=pos.quality==='good'?'none':'block';$('mapMsg').textContent=pos.quality==='rough'?`GPS rough (±${Math.round(pos.acc)} m) — map building paused`:pos.quality==='dr'?'No good GPS: counting steps':'';}
+  const info=[];if(m.near)info.push('near '+m.near);if(m.poi_status&&m.poi_status!=='ok')info.push('⚠ '+m.poi_status.split(':')[0]);
+  if(pos.lat!=null)info.push(`±${Math.round(pos.acc||0)} m · heading ${pos.heading!=null?Math.round(pos.heading)+'° ('+pos.heading_src+')':'unknown'} · ${m.nodes.length} places · ${m.pins.length} on map`);
+  $('mapInfo').textContent=info.join(' · ');
+  const keep=new Set();
+  // you
+  if(pos.lat!=null){
+    MR.marker('you',pos.lat,pos.lng,{html:YOU_HTML(pos),w:26,h:26,z:1000});keep.add('you');
+    MR.circle('acc',pos.lat,pos.lng,pos.acc||10,{color:'#3b82f6',fill:.08,weight:1});keep.add('acc');
+    if(!centered){MR.setView(pos.lat,pos.lng,20);centered=true}else if(follow){MR.panTo(pos.lat,pos.lng)}
+  }
+  // trail
+  if(m.trail.length>1){MR.polyline('trail',m.trail,{color:'#ffffff',weight:2,opacity:.45,dash:'2 6',z:1});keep.add('trail')}
+  // edges (walked paths) with cost
+  const onRoute=(a,b)=>m.route&&m.route.path&&Math.abs(m.route.path.indexOf(a)-m.route.path.indexOf(b))===1&&m.route.path.includes(a)&&m.route.path.includes(b);
+  const N={};m.nodes.forEach(n=>N[n.id]=n);
+  m.edges.forEach(e=>{if(e.a>e.b)return;const a=N[e.a],b=N[e.b];if(!a||!b||a.lat==null||b.lat==null)return;const k='e'+e.a+'-'+e.b;keep.add(k);
+    MR.polyline(k,[[a.lat,a.lng],[b.lat,b.lng]],{color:e.blocked?'#ef4444':onRoute(e.a,e.b)?'#4cc38a':(e.crowd>0.5?'#f5a524':'#9fb3c8'),weight:onRoute(e.a,e.b)?6:4,opacity:e.blocked?.9:.75,dash:e.blocked?'6 8':null,z:2,
+      tooltip:`${Math.round(e.dist)} m${e.crowd>0.05?' · crowd ×'+(1+e.crowd).toFixed(1):''}${e.blocked?' · BLOCKED':''} · cost ${Math.round(e.dist*(1+e.crowd))} · click to ${e.blocked?'open':'block'}`,
+      onClick:async()=>{const bl=!e.blocked;await api(`/edges/${e.a}/${e.b}`,{method:'POST',json:{blocked:bl}});toast(bl?'Path blocked — rerouting if needed':'Path open again');tick()}})});
+  // places
+  m.nodes.forEach(n=>{if(n.lat==null)return;const k='n'+n.id;keep.add(k);
+    MR.marker(k,n.lat,n.lng,{html:NODE_HTML(n),w:n.named?16:10,h:n.named?16:10,z:n.named?300:50,title:n.name,popupHtml:()=>nodePopup(N[n.id]||n)})});
+  // route
+  if(m.route&&m.route.ok&&pos.lat!=null){const pts=[[pos.lat,pos.lng]].concat(m.route.waypoints.map(w=>[w.lat,w.lng]));
+    MR.polyline('route',pts,{color:'#4cc38a',weight:5,opacity:.95,dash:m.route.mode==='compass'?'8 10':null,z:5});keep.add('route')}
+  // search area: reach circle, last-seen point, every building in search order
+  const z=S.search;
+  if(z){
+    MR.circle('s_reach_now',z.lat,z.lng,z.reach_now_m,{color:'#f59e0b',fill:.03,weight:1,opacity:.6});keep.add('s_reach_now');
+    MR.circle('s_area',z.lat,z.lng,z.radius_m,{color:'#ef4444',fill:.08,weight:2,opacity:.9});keep.add('s_area');
+    const tour=z.buildings.filter(b=>!b.checked);const ti=tour.findIndex(b=>b.next);
+    const ord=ti>0?tour.slice(ti).concat(tour.slice(0,ti)):tour;
+    if(ord.length>1){MR.polyline('s_tour',ord.map(b=>[b.lat,b.lng]),{color:'#f59e0b',weight:2,opacity:.75,dash:'4 6',z:3});keep.add('s_tour')}
+    MR.marker('s_last',z.lat,z.lng,{html:'<div class="lastseen" title="last seen">!</div>',w:30,h:30,z:950,title:'last seen '+z.seen_ago});keep.add('s_last');
+    z.buildings.forEach(b=>{const k='b'+b.id;keep.add(k);
+      MR.marker(k,b.lat,b.lng,{html:`<div class="bmk ${b.checked?'done':''} ${b.next?'next':''}" title="${esc(b.name)}">${b.order}</div>`,w:b.next?26:20,h:b.next?26:20,z:b.next?940:(b.checked?200:600),title:b.name,
+        popupHtml:()=>`<b>${esc(b.name)}</b><br><small>#${b.order} · ${b.dist} m from where they were last seen · ${esc(b.type||'')}</small>
+          <div class="row" style="margin-top:8px"><button onclick="api('/search/go',{method:'POST',json:{id:'${b.id}'}}).then(()=>{MR.closePopup();tick()})">Go here</button>
+          <button onclick="api('/search/check',{method:'POST',json:{id:'${b.id}'}}).then(()=>{MR.closePopup();tick()})">Searched ✓</button></div>`})});
+  }
+  // reach bubble for the person you clicked: how far they could have walked
+  // (time since you last saw them, or the time on the slider; walking pace = min per mile setting)
+  const sel=selectedPin&&m.pins.find(p=>p.id===selectedPin);
+  if(sel){
+    const mpm=S.settings.walk_min_per_mile||16.5;
+    const since=Math.max(0,(Date.now()/1000-(sel.last_seen||Date.now()/1000))/60);
+    const mins=Math.max(since,reachMinutes);   // the slider starts at "since last seen" and only goes further
+    if(document.activeElement!==$('reachMin'))$('reachMin').value=Math.round(mins);
+    reachShownMin=mins;const miles=mins/mpm;const r=Math.max(10,miles*1609.34);
+    MR.circle('reach',sel.lat,sel.lng,r,{color:sel.is_watch?'#ef4444':(sel.met?'#4cc38a':'#f59e0b'),fill:.12,weight:2,opacity:.9});keep.add('reach');
+    $('reachLbl').textContent=`${sel.name||'Unknown'}: ${mins>since+0.5?'+'+Math.round(mins-since)+' min ahead · ':''}${mins<1?'<1':Math.round(mins)} min → ${miles<0.1?Math.round(miles*5280)+' ft':miles.toFixed(2)+' mi'}`;
+    $('reachFind').style.display='';
+  }else{$('reachLbl').textContent='click a pin';$('reachFind').style.display='none'}
+  // people pins
+  const OFF=fanOut(m.pins);
+  m.pins.forEach(p=>{const k='p'+p.id;keep.add(k);
+    MR.marker(k,p.lat,p.lng,{html:PIN_HTML(p,OFF[p.id]),w:46,h:46,z:p.is_watch?900:(p.met?500:100),title:p.name||'',popupHtml:()=>{selectedPin=p.id;setTimeout(drawMap,0);return pinPopup((S.map.pins.find(q=>q.id===p.id))||p)}})});
+  Object.keys(MR.layers).forEach(k=>{if(!keep.has(k))MR.remove(k)});
+  if(!centered&&m.pins.length){MR.setView(m.pins[0].lat,m.pins[0].lng,20);centered=true}
 }
-cv.addEventListener('click',async e=>{
-  if(!MP||!S)return;const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;let best=null,bd=16;
-  S.map.nodes.forEach(n=>{const p=MP.pos[n.id];if(!p)return;const d=Math.hypot(p[0]-x,p[1]-y);if(d<bd){bd=d;best=n}});
-  if(!best)return;const a=prompt(`${best.name}: type a new name, "go" to route here, or "block <place number>"`,'go');if(!a)return;
-  if(a==='go'){const r2=await api('/route?to='+best.id);toast(r2.ok?'Route: '+r2.cost_m+' m':'No route')}
-  else if(a.startsWith('block ')){const other=S.map.nodes.find(n=>String(n.id)===a.slice(6).trim()||n.name.toLowerCase()===a.slice(6).trim().toLowerCase());
-    if(other)await api(`/edges/${best.id}/${other.id}`,{method:'POST',json:{blocked:true}})}
-  else await api('/nodes/'+best.id,{method:'POST',json:{name:a}});
-});
-async function markPlace(){const n=prompt('Name this place (optional):','');if(n===null)return;try{const r=await api('/places/mark',{method:'POST',json:{name:n}});toast('Marked '+r.name)}catch(e){}}
-async function clearMap(){if(!confirm('Forget all places? People and photos stay.'))return;await api('/map/clear',{method:'POST'});toast('Map cleared')}
+async function saveSettings(){await api('/settings',{method:'POST',json:{convo_seconds:+$('convoS').value||30,convo_enabled:$('convoOn').checked}});toast('Saved')}
+async function saveKey(){const k=$('gkey').value.trim();await api('/settings',{method:'POST',json:{google_maps_key:k}});toast(k?'Key saved, loading Google Maps…':'Key removed, using Esri imagery');setTimeout(()=>location.reload(),600)}
+async function markPlace(){const n=prompt('Name the place you are standing at:','');if(n===null)return;try{const r=await api('/places/mark',{method:'POST',json:{name:n}});toast('Marked '+r.name)}catch(e){}}
+async function clearMap(){if(!confirm('Forget all places and walked paths? People and photos stay.'))return;await api('/map/clear',{method:'POST'});toast('Map cleared')}
 async function deleteAll(){if(!confirm('Wipe EVERYTHING: people, photos, places?'))return;await api('/reset',{method:'POST'});lastPeopleKey='';lastTlKey='';toast('Everything deleted')}
 </script>
 </body>

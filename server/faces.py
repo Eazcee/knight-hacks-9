@@ -45,9 +45,34 @@ MAX_EMB_PER_PERSON = 16       # training photos kept per person
 NEW_MIN_QUALITY = 0.45        # a stranger needs a decent photo before we create a person
 TRAIN_MIN_QUALITY = 0.45      # automatic additions to a training set
 TRAIN_MODE_MIN_QUALITY = 0.30 # train mode is supervised, so we accept a bit more
-SUGGEST_MERGE = 0.28          # cross-similarity above this = "might be the same person"
+SUGGEST_MERGE = 0.45          # cross-similarity above this = "might be the same person"
 AUTO_MAX_SIM = 0.80           # auto-learning skips photos this similar to one we already have
 TRAIN_MODE_MAX_SIM = 0.88     # train mode is a bit more generous (slow head turns change little per frame)
+# Walk-by enrollment: a passer-by is often blurry in every frame. If the same unknown face
+# shows up in 2+ frames within a few seconds, enroll from the best of them with a lower bar.
+WALKBY_MIN_QUALITY = float(os.environ.get("BEACON_WALKBY_Q", 0.32))
+WALKBY_MIN_PX = int(os.environ.get("BEACON_WALKBY_PX", 46))
+WALKBY_WINDOW_S = 4.0
+WALKBY_SAME = 0.45            # two blurry looks at the same stranger usually score above this
+
+
+def _providers():
+    """GPU if the laptop has one (CUDA for NVIDIA, DirectML for any Windows GPU), else CPU.
+    BEACON_PROVIDERS=cpu forces CPU."""
+    if os.environ.get("BEACON_PROVIDERS", "").lower() == "cpu":
+        return ["CPUExecutionProvider"], -1
+    try:
+        import onnxruntime as ort
+        avail = ort.get_available_providers()
+    except Exception:
+        return ["CPUExecutionProvider"], -1
+    for gpu in ("CUDAExecutionProvider", "DmlExecutionProvider"):
+        if gpu in avail:
+            return [gpu, "CPUExecutionProvider"], 0
+    return ["CPUExecutionProvider"], -1
+
+
+MODEL = os.environ.get("BEACON_MODEL", "buffalo_l")   # buffalo_s = ~4x faster on CPU, a bit less accurate
 DET_SIZE = int(os.environ.get("BEACON_DET", 640))                  # detector input, long side. smaller = faster, shorter range
 SCAN_TILE = int(os.environ.get("BEACON_SCAN_TILE", 1600))          # /scan: big photos are searched in tiles this size
 
@@ -92,12 +117,28 @@ class FaceEngine:
         os.makedirs(crops_dir, exist_ok=True)
         self.auto_enroll = auto_enroll
         self.lock = threading.Lock()
-        self.app = FaceAnalysis(
-            name="buffalo_l",
-            providers=["CPUExecutionProvider"],
-            allowed_modules=["detection", "recognition"],
-        )
-        self.app.prepare(ctx_id=-1, det_size=(DET_SIZE, DET_SIZE))
+        # embeddings from different models can't be compared: don't mix them in one database
+        mpath = os.path.join(os.path.dirname(crops_dir) or ".", "model.txt")
+        saved = open(mpath).read().strip() if os.path.exists(mpath) else None
+        if saved and saved != MODEL and len(db.embeddings()[0]):
+            raise SystemExit(f"This database was built with {saved}, but BEACON_MODEL={MODEL}. "
+                             f"Use {saved}, or delete the data folder to start fresh with {MODEL}.")
+        with open(mpath, "w") as fh:
+            fh.write(MODEL)
+        providers, ctx = _providers()
+        self.device = "GPU (" + providers[0].replace("ExecutionProvider", "") + ")" if ctx >= 0 else "CPU"
+        try:
+            self.app = FaceAnalysis(name=MODEL, providers=providers, allowed_modules=["detection", "recognition"])
+            self.app.prepare(ctx_id=ctx, det_size=(DET_SIZE, DET_SIZE))
+        except Exception as e:   # GPU provider present but broken: fall back to CPU
+            print("GPU init failed, using CPU:", e)
+            self.device = "CPU"
+            self.app = FaceAnalysis(name=MODEL, providers=["CPUExecutionProvider"],
+                                    allowed_modules=["detection", "recognition"])
+            self.app.prepare(ctx_id=-1, det_size=(DET_SIZE, DET_SIZE))
+        self.device += f" · {MODEL}"
+        print("Beacon face engine on", self.device)
+        self.pending = []       # walk-by candidates: unknown faces seen recently
         self._det_cur = (DET_SIZE, DET_SIZE)
         self._reload_gallery()
         self.recent = {}        # person_id -> last match time (for smoothing)
@@ -355,11 +396,17 @@ class FaceEngine:
                     if not strongly_other:
                         pid, sim = target, max(sim if pid == target else 0.0, self.best_sim_to(f["emb"], target))
                 if pid is None:
-                    if (self.auto_enroll and sim < NEW_PERSON_THRESHOLD and f["px"] >= ENROLL_PX
-                            and f["quality"] >= NEW_MIN_QUALITY):
+                    best = None
+                    if self.auto_enroll and sim < NEW_PERSON_THRESHOLD:
+                        if f["px"] >= ENROLL_PX and f["quality"] >= NEW_MIN_QUALITY:
+                            best = (f, img_bgr, f["box"])
+                        else:
+                            best = self._walkby(f, img_bgr, ts)
+                    if best is not None:
+                        bf, bimg, bbox = best
                         pid = "p_" + uuid.uuid4().hex[:6]
                         self.db.add_person(pid)
-                        self._add_to_gallery(pid, f["emb"], img_bgr, f["box"], f["quality"], "auto")
+                        self._add_to_gallery(pid, bf["emb"], bimg, bbox, bf["quality"], "auto")
                         new = True
                         sim = 1.0   # this photo IS their reference now
                     else:
@@ -415,6 +462,35 @@ class FaceEngine:
         self.last_far = far_unknown
         return results
 
+    def _walkby(self, f, img, ts):
+        """Remember an unknown face that isn't good enough to enroll yet. If the same face was
+        seen in another frame in the last few seconds, enroll from the best look at them."""
+        self.pending = [c for c in self.pending if ts - c["last"] <= WALKBY_WINDOW_S]
+        if f["px"] < 30:
+            return None
+        x1, y1, x2, y2 = f["box"]
+        h, w = img.shape[:2]
+        mx, my = int((x2 - x1) * 0.6), int((y2 - y1) * 0.6)
+        X1, Y1, X2, Y2 = max(0, x1 - mx), max(0, y1 - my), min(w, x2 + mx), min(h, y2 + my)
+        look = {"f": f, "img": img[Y1:Y2, X1:X2].copy(), "box": [x1 - X1, y1 - Y1, x2 - X1, y2 - Y1]}
+        match = None
+        for c in self.pending:
+            if float(c["emb"] @ f["emb"]) >= WALKBY_SAME:
+                match = c
+                break
+        if match is None:
+            self.pending.append({"emb": f["emb"], "hits": 1, "last": ts, "best": look})
+            return None
+        match["hits"] += 1
+        match["last"] = ts
+        if f["quality"] > match["best"]["f"]["quality"]:
+            match["best"] = look
+        b = match["best"]
+        if b["f"]["quality"] >= WALKBY_MIN_QUALITY and b["f"]["px"] >= WALKBY_MIN_PX:
+            self.pending = [c for c in self.pending if c is not match]
+            return b["f"], b["img"], b["box"]
+        return None
+
     # ---- curation helpers ----------------------------------------------
     def suggest_merges(self, limit=10):
         """Pairs of people whose photos look alike enough that they may be one person."""
@@ -424,6 +500,7 @@ class FaceEngine:
         for i, pid in enumerate(self.gal_ids):
             groups.setdefault(pid, []).append(i)
         pids = list(groups)
+        names = {r["id"]: (r["name"] or "").strip().lower() for r in self.db._run("SELECT id, name FROM people", fetch="all")}
         sims = self.gal_mat @ self.gal_mat.T
         out = []
         for i in range(len(pids)):
@@ -431,6 +508,9 @@ class FaceEngine:
                 key = tuple(sorted((pids[i], pids[j])))
                 if key in self.dismissed:
                     continue
+                na, nb = names.get(pids[i]), names.get(pids[j])
+                if na and nb and na != nb:
+                    continue   # you named them differently: they're different people
                 s = float(sims[np.ix_(groups[pids[i]], groups[pids[j]])].max())
                 if s >= SUGGEST_MERGE:
                     out.append({"a": key[0], "b": key[1], "sim": round(s, 3)})

@@ -584,7 +584,14 @@ def _maybe_stamp(place, ts, force=False):
     new_here = any(e.get("node_id") == nid and e["type"] in ("new_place", "arrived") for e in place.get("events", []))
     if not (force or (new_here and not world.has(nid))):
         return False
-    n = world.add(nid, last_dm, last_color, geo.x, geo.y, geo.heading, ts)
+    photo = None
+    if geo.last_img is not None:
+        im = geo.last_img
+        sc = 360 / max(im.shape[:2]) if max(im.shape[:2]) > 360 else 1.0
+        im = cv2.resize(im, (int(im.shape[1] * sc), int(im.shape[0] * sc)), interpolation=cv2.INTER_AREA) if sc < 1 else im
+        ok, buf = cv2.imencode(".jpg", im, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        photo = buf.tobytes() if ok else None
+    n = world.add(nid, last_dm, last_color, geo.x, geo.y, geo.heading, ts, photo=photo)
     place.setdefault("events", []).append({"type": "snapshot", "node_id": nid, "points": n})
     return True
 
@@ -684,6 +691,7 @@ def world_json():
                       for n in db.nodes() if n.get("lat") is not None],
             "edges": [{"a": e["a"], "b": e["b"], "blocked": bool(e["blocked"])} for e in db.edges() if e["a"] < e["b"]],
             "pins": pins, "route": route,
+            "trail": [[round(v, 1) for v in geo._xy(t[1], t[2])] for t in list(geo.trail)[-600:]],
             "you": {"x": round(geo.x, 1), "y": round(geo.y, 1), "heading": geo.heading if geo.heading_known else None,
                     "quality": geo.quality, "has_position": geo.lat is not None}}
 
@@ -700,6 +708,14 @@ def world_snapshot():
     place = {"events": []}
     _maybe_stamp(place, time.time(), force=True)
     return {"ok": True, "node_id": geo.current_node, "stamps": len(world.stamps)}
+
+
+@app.get("/world/photo/{nid}.jpg")
+def world_photo(nid: int):
+    p = world.photo_path(nid)
+    if not os.path.exists(p):
+        raise HTTPException(404, "no photo")
+    return Response(open(p, "rb").read(), media_type="image/jpeg")
 
 
 @app.post("/world/clear")

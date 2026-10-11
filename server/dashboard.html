@@ -37,7 +37,12 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .d3wrap{position:relative;background:#06080b;border-radius:10px;overflow:hidden;aspect-ratio:16/10;max-height:420px}
 .top .panel.big{grid-column:1/-1}.panel.big .d3wrap{aspect-ratio:auto;height:72vh;max-height:none}
 #d3{width:100%;height:100%;display:block;cursor:grab}
-#d3labels{position:absolute;inset:0;pointer-events:none}
+#d3labels,#d3photos{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+#d3photos img{position:absolute;transform:translate(-50%,-100%);width:44px;height:78px;object-fit:cover;border:2px solid #e5e7eb;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.6);pointer-events:auto;cursor:zoom-in;background:#111}
+#d3photos img:hover{z-index:2;border-color:#3b82f6;transform:translate(-50%,-100%) scale(1.8);transform-origin:50% 100%}
+.d3tools{position:absolute;left:10px;bottom:10px;display:none;gap:6px}
+.d3tools button{font-size:12px;padding:5px 9px;background:rgba(14,16,19,.85)}
+.d3tools button.on{border-color:#4cc38a;color:#4cc38a}
 #d3labels .d3l{position:absolute;transform:translate(-50%,-100%);background:rgba(14,16,19,.85);border:1px solid #4cc38a;border-radius:6px;padding:2px 7px;font-size:12px;white-space:nowrap}
 #d3labels .d3l.watch{border-color:#ef4444;color:#ffb4b4}
 .d3empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted)}
@@ -216,9 +221,10 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
         <h2>3D view
           <span class="right"><button id="d3live" class="primary" onclick="d3mode('live')">Live</button><button id="d3world" onclick="d3mode('world')">World</button>
           <button onclick="api('/world/snapshot',{method:'POST'}).then(r=>toast('Snapshot saved · '+r.stamps+' places in 3D')).catch(()=>{})" title="Freeze the current 3D view at this spot">📸 Snapshot</button>
-          <button class="ghost" onclick="d3reset()" title="Reset the camera angle">↺</button><button class="ghost" id="d3bigBtn" onclick="d3big()">⤢ Bigger</button><button class="ghost" id="d3clear" style="display:none" title="Delete every 3D snapshot (places and paths stay)" onclick="api('/world/clear',{method:'POST'}).then(()=>{toast('3D snapshots cleared');tick()}).catch(()=>{})">🗑 Clear 3D</button></span></h2>
+          <button class="ghost" onclick="d3reset()" title="Reset the camera angle">↺</button><button class="ghost" id="d3bigBtn" onclick="d3big()">⤢ Bigger</button></span></h2>
         <div class="muted" id="d3info" style="font-size:12px;margin:-4px 0 8px;min-height:14px"></div>
-        <div class="d3wrap"><canvas id="d3"></canvas><div id="d3labels"></div><div class="d3empty" id="d3empty">Depth appears when the glasses stream.<br><small>Drag to orbit · wheel to zoom</small></div></div>
+        <div class="d3wrap"><canvas id="d3"></canvas><div id="d3photos"></div><div id="d3labels"></div>
+          <div class="d3tools" id="d3tools"><button id="d3walkBtn" onclick="d3walk()" title="Fly through the walk at eye height">▶ Walk it</button><button id="d3rawBtn" onclick="d3raw()" title="Show the raw depth surfaces from each snapshot">Raw depth</button><button title="Delete every 3D snapshot (places and paths stay)" onclick="api('/world/clear',{method:'POST'}).then(()=>{toast('3D snapshots cleared');tick()}).catch(()=>{})">🗑 Clear 3D</button></div><div class="d3empty" id="d3empty">Depth appears when the glasses stream.<br><small>Drag to orbit · wheel to zoom</small></div></div>
         <small class="muted" id="d3help">What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.</small>
       </div>
       <div class="col">
@@ -338,12 +344,12 @@ function renderLive(){
 }
 // ---------------- 3D view (point cloud from the depth net)
 const D3={ready:false,pts:null,geo:null,cam:null,scene:null,ren:null,az:Math.PI,el:0.35,dist:6,tgt:null,drag:null,busy:false,last:0,n:0,
-  mode:'live',wmesh:null,wmat:null,wgroup:null,wrev:-1,wn:0,you:null,cone:null};
-function d3mode(m){D3.mode=m;$('d3live').className=m==='live'?'primary':'';$('d3world').className=m==='world'?'primary':'';$('d3clear').style.display=m==='world'?'':'none';
-  if(D3.ready){D3.grid.position.y=m==='world'?0:-1.6;D3.pts.visible=m==='live';D3.wmesh.visible=m==='world';D3.wgroup.visible=m==='world';D3.cone.visible=m==='live';D3.you.visible=m==='world';
+  mode:'live',wmesh:null,wmat:null,wgroup:null,whall:null,wrev:-1,wn:0,you:null,cone:null,raw:false,fly:null,ph:[]};
+function d3mode(m){D3.mode=m;$('d3live').className=m==='live'?'primary':'';$('d3world').className=m==='world'?'primary':'';$('d3tools').style.display=m==='world'?'flex':'none';if(m!=='world'){D3.fly=null;$('d3photos').innerHTML='';D3.ph=[]}
+  if(D3.ready){D3.grid.position.y=m==='world'?0:-1.6;D3.pts.visible=m==='live';D3.wmesh.visible=m==='world'&&D3.raw;D3.whall.visible=m==='world';D3.wgroup.visible=m==='world';D3.cone.visible=m==='live';D3.you.visible=m==='world';
     if(m==='world'){D3.az=Math.PI*0.8;D3.el=0.7;D3.dist=28;renderWorld(true)}else{D3.tgt.set(0,0,4);d3reset()}}
   $('d3help').textContent=m==='live'?'What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.'
-    :'Everywhere you walked, in 3D: a snapshot of the cloud at every place the map made (every ~8 m), turned to your heading and pinned where you stood. Indoors this uses steps + the glasses\' compass. 📸 Snapshot saves one right here.';
+    :'The hallways you walked, rebuilt: at every place the map makes (~8 m) the depth net measures how far the walls are on each side; floor and walls are drawn from that along your path, with the photo from each spot above it (click to enlarge). ▶ Walk it flies through at eye height. Indoors this uses steps + the glasses\' compass. Raw depth shows the unprocessed surfaces.';
 }
 function d3init(){
   if(D3.ready||!window.THREE)return;
@@ -356,11 +362,12 @@ function d3init(){
   const cone=new THREE.Mesh(new THREE.ConeGeometry(0.12,0.35,12),new THREE.MeshBasicMaterial({color:0x3b82f6}));cone.rotation.x=Math.PI/2;D3.scene.add(cone);D3.cone=cone;
   // world mode: all snapshots + places/paths/people + you
   D3.wmat=new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide});D3.wmesh=new THREE.Group();D3.wmesh.visible=false;D3.scene.add(D3.wmesh);
+  D3.whall=new THREE.Group();D3.whall.visible=false;D3.scene.add(D3.whall);
   D3.wgroup=new THREE.Group();D3.wgroup.visible=false;D3.scene.add(D3.wgroup);
   D3.you=new THREE.Mesh(new THREE.ConeGeometry(0.35,1.0,12),new THREE.MeshBasicMaterial({color:0x3b82f6}));D3.you.visible=false;D3.scene.add(D3.you);
   D3.geo=new THREE.BufferGeometry();
   D3.pts=new THREE.Points(D3.geo,new THREE.PointsMaterial({size:0.07,vertexColors:true,sizeAttenuation:true}));D3.scene.add(D3.pts);
-  cv.addEventListener('mousedown',e=>{D3.drag=[e.clientX,e.clientY];cv.style.cursor='grabbing'});
+  cv.addEventListener('mousedown',e=>{if(D3.fly)d3walk();D3.drag=[e.clientX,e.clientY];cv.style.cursor='grabbing'});
   window.addEventListener('mouseup',()=>{D3.drag=null;cv.style.cursor='grab'});
   window.addEventListener('mousemove',e=>{if(!D3.drag)return;D3.az-=(e.clientX-D3.drag[0])*0.008;D3.el=Math.max(-1.2,Math.min(1.4,D3.el+(e.clientY-D3.drag[1])*0.006));D3.drag=[e.clientX,e.clientY];d3draw()});
   cv.addEventListener('wheel',e=>{e.preventDefault();D3.dist=Math.max(1.5,Math.min(D3.mode==='world'?160:40,D3.dist*(e.deltaY>0?1.12:0.9)));d3draw()},{passive:false});
@@ -370,11 +377,14 @@ function d3size(){const cv=$('d3'),w=cv.clientWidth||600,h=cv.clientHeight||375;
 function d3reset(){if(D3.mode==='world'){D3.az=Math.PI*0.8;D3.el=0.7;D3.dist=28}else{D3.az=Math.PI;D3.el=0.35;D3.dist=6}d3draw()}
 function d3draw(){
   if(!D3.ready)return;
-  const t=D3.tgt;D3.cam.position.set(t.x+D3.dist*Math.cos(D3.el)*Math.sin(D3.az),t.y+D3.dist*Math.sin(D3.el),t.z+D3.dist*Math.cos(D3.el)*Math.cos(D3.az));
-  D3.cam.lookAt(t);D3.ren.render(D3.scene,D3.cam);
+  const t=D3.tgt;
+  if(!D3.fly){D3.cam.position.set(t.x+D3.dist*Math.cos(D3.el)*Math.sin(D3.az),t.y+D3.dist*Math.sin(D3.el),t.z+D3.dist*Math.cos(D3.el)*Math.cos(D3.az));D3.cam.lookAt(t)}
+  D3.ren.render(D3.scene,D3.cam);
   // name labels at each face's 3D position
   const L=$('d3labels');const w=$('d3').clientWidth,h=$('d3').clientHeight;
-  if(D3.mode==='world'){const items=[];(D3.wgroup?D3.wgroup.children:[]).forEach(m=>{if(!m.userData||!m.userData.label)return;const v=m.position.clone().add(new THREE.Vector3(0,0.5,0)).project(D3.cam);if(v.z>1)return;
+  if(D3.mode==='world'){const items=[];
+    D3.ph.forEach(p=>{const v=W3(p.x,p.y,3.1).project(D3.cam);const show=!D3.fly&&v.z<1&&Math.abs(v.x)<1.1&&Math.abs(v.y)<1.1;p.el.style.display=show?'block':'none';
+      if(show){p.el.style.left=((v.x+1)/2*w)+'px';p.el.style.top=((1-v.y)/2*h)+'px'}});(D3.wgroup?D3.wgroup.children:[]).forEach(m=>{if(!m.userData||!m.userData.label)return;const v=m.position.clone().add(new THREE.Vector3(0,0.5,0)).project(D3.cam);if(v.z>1)return;
       items.push(`<div class="d3l ${m.userData.watch?'watch':''}" style="left:${(v.x+1)/2*w}px;top:${(1-v.y)/2*h}px">${esc(m.userData.label)}</div>`)});
     (D3.wmeta?D3.wmeta.nodes.filter(nd=>nd.named):[]).forEach(nd=>{const v=W3(nd.x,nd.y,0.5).project(D3.cam);if(v.z>1)return;items.push(`<div class="d3l" style="border-color:#3b82f6;left:${(v.x+1)/2*w}px;top:${(1-v.y)/2*h}px">${esc(nd.name)}</div>`)});
     L.innerHTML=items.join('');return}
@@ -394,15 +404,21 @@ async function renderWorld(force){
       // places, paths, people
       const g=D3.wgroup;while(g.children.length)g.remove(g.children[0]);
       const N={};meta.nodes.forEach(nd=>N[nd.id]=nd);
-      meta.nodes.forEach(nd=>{const m=new THREE.Mesh(new THREE.SphereGeometry(nd.named?0.35:0.18,10,10),new THREE.MeshBasicMaterial({color:nd.named?0x3b82f6:0x9fb3c8}));m.position.copy(W3(nd.x,nd.y,0.1));g.add(m)});
+      meta.nodes.forEach(nd=>{const m=new THREE.Mesh(new THREE.RingGeometry(nd.named?0.3:0.16,nd.named?0.45:0.26,24),new THREE.MeshBasicMaterial({color:nd.named?0x3b82f6:0x9fb3c8,side:THREE.DoubleSide}));
+        m.rotation.x=-Math.PI/2;m.position.copy(W3(nd.x,nd.y,0.04));g.add(m)});
       meta.edges.forEach(e=>{const a=N[e.a],b=N[e.b];if(!a||!b)return;const gm=new THREE.BufferGeometry().setFromPoints([W3(a.x,a.y,0.1),W3(b.x,b.y,0.1)]);
         g.add(new THREE.Line(gm,new THREE.LineBasicMaterial({color:e.blocked?0xef4444:0x6b7280})))});
       if(meta.route&&meta.route.length){const pts=[W3(meta.you.x,meta.you.y,0.2)].concat(meta.route.map(p=>W3(p[0],p[1],0.2)));g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:0x4cc38a})))}
-      meta.pins.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(0.3,10,10),new THREE.MeshBasicMaterial({color:p.is_watch?0xef4444:(p.met?0x4cc38a:0xf59e0b)}));m.position.copy(W3(p.x,p.y,1.4));m.userData={label:p.name||'Unknown',watch:p.is_watch};g.add(m)});
+      meta.pins.forEach(p=>{const mat=new THREE.MeshBasicMaterial({color:p.is_watch?0xef4444:(p.met?0x4cc38a:0xf59e0b)});   // a person: body + head, where they were seen
+        const body=new THREE.Mesh(new THREE.CylinderGeometry(0.2,0.24,1.35,14),mat);body.position.copy(W3(p.x,p.y,0.68));g.add(body);
+        const head=new THREE.Mesh(new THREE.SphereGeometry(0.17,14,12),mat);head.position.copy(W3(p.x,p.y,1.58));head.userData={label:p.name||'Unknown',watch:p.is_watch};g.add(head)});
+      buildHall(meta);buildPhotos(meta);
       D3.wmeta=meta;D3.wn=total;$('d3empty').style.display=total?'none':'block';if(!total)$('d3empty').innerHTML='No snapshots yet.<br><small>Walk (or press 📸 Snapshot) with GPS, or steps + the glasses\' compass indoors.</small>';
     }catch(e){}
   }
   const you=(S.map&&S.map.position)||{};
+  D3.you.visible=D3.mode==='world'&&!D3.fly;
+  if(D3.fly)return;
   if(you.x!=null){D3.you.position.copy(W3(you.x,you.y,0.8));
     // cone points +y by default: lay it flat (-90° about x), then turn it to the compass heading (about world up = y)
     D3.you.rotation.set(-Math.PI/2,-(you.heading||0)*Math.PI/180,0,'YXZ');
@@ -427,6 +443,72 @@ function stampMesh(buf,off){
   if(!n)return {mesh:null,n:0,next:off};
   const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.BufferAttribute(pos,3));geo.setAttribute('color',new THREE.BufferAttribute(col,3));geo.setIndex(idx);
   return {mesh:new THREE.Mesh(geo,D3.wmat),n,next:off};
+}
+// ---- the hallway, rebuilt from what each snapshot measured (walls left/right, their colors, how far they run)
+const HALL_H=2.6,HALL_DEF=1.2;
+function rgbHex(c,k,mix){if(!c)return null;const m=mix||0;return new THREE.Color(((c[0]*(1-m)+150*m)*k)/255,((c[1]*(1-m)+150*m)*k)/255,((c[2]*(1-m)+150*m)*k)/255)}
+function hallQuad(g,pts,color,opts){
+  const geo=new THREE.BufferGeometry().setFromPoints(pts);geo.setIndex([0,1,2,0,2,3]);
+  g.add(new THREE.Mesh(geo,new THREE.MeshBasicMaterial(Object.assign({color,side:THREE.DoubleSide},opts||{}))));
+}
+function buildHall(meta){
+  const g=D3.whall;while(g.children.length){const m=g.children[0];g.remove(m);if(m.geometry)m.geometry.dispose();if(m.material)m.material.dispose()}
+  const N={},nb={};meta.nodes.forEach(nd=>N[nd.id]=nd);
+  meta.edges.forEach(e=>{(nb[e.a]=nb[e.a]||[]).push(e.b);(nb[e.b]=nb[e.b]||[]).push(e.a)});
+  // every walked path as a floor strip, so the pieces join up (red = blocked)
+  meta.edges.forEach(e=>{const a=N[e.a],b=N[e.b];if(!a||!b)return;const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1,nx=-dy/d*0.6,ny=dx/d*0.6;
+    hallQuad(g,[W3(a.x+nx,a.y+ny,0.01),W3(b.x+nx,b.y+ny,0.01),W3(b.x-nx,b.y-ny,0.01),W3(a.x-nx,a.y-ny,0.01)],e.blocked?0x7f1d1d:0x2b3340)});
+  // each snapshot: the floor and walls it saw ahead of where you stood
+  // snapshots along the same straight stretch share their wall distances (median), so a straight hall comes out straight
+  const same=(s,o)=>{const dh=Math.abs(((s.heading-o.heading)%360+540)%360-180);if(dh>30)return false;const h=s.heading*Math.PI/180;
+    const dx=o.x-s.x,dy=o.y-s.y;return Math.abs(dx*Math.cos(h)-dy*Math.sin(h))<1.5&&Math.hypot(dx,dy)<16};
+  const med=a=>{a=a.filter(v=>v!=null).sort((x,y)=>x-y);return a.length?a[Math.floor(a.length/2)]:null};
+  const W=meta.stamps.map(s=>{const g=meta.stamps.filter(o=>o===s||same(s,o)),w=Object.assign({},s.walls||{});
+    ['l','r'].forEach(k=>{const seen=g.filter(o=>(o.walls||{})[k]!=null);if(w[k]!=null||seen.length*2>g.length)w[k]=med(g.map(o=>(o.walls||{})[k]));
+      if(w[k]!=null&&!w[k+'_rgb']){const c=seen.find(o=>o.walls[k+'_rgb']);if(c)w[k+'_rgb']=c.walls[k+'_rgb']}});return w});
+  meta.stamps.forEach((s,i)=>{const w=W[i],h=s.heading*Math.PI/180,F=[Math.sin(h),Math.cos(h)],Rt=[Math.cos(h),-Math.sin(h)];
+    let L=Math.max(2,Math.min(7,Math.max(w.l_len||0,w.r_len||0,Math.min(w.ahead||3,7))));
+    (nb[s.node]||[]).forEach(id=>{const o=N[id];if(!o)return;const dx=o.x-s.x,dy=o.y-s.y,d=Math.hypot(dx,dy);if(d<0.5)return;
+      if((dx*F[0]+dy*F[1])/d>0.85)L=Math.max(L,Math.min(14,d+0.6))});   // the next place is straight ahead: run the hall to it
+    const l=w.l||HALL_DEF,r=w.r||HALL_DEF,z0=-0.6,P=(sx,fz,up)=>W3(s.x+Rt[0]*sx+F[0]*fz,s.y+Rt[1]*sx+F[1]*fz,up);
+    hallQuad(g,[P(-l,z0,0.02+i*0.001),P(r,z0,0.02+i*0.001),P(r,L,0.02+i*0.001),P(-l,L,0.02+i*0.001)],rgbHex(w.floor_rgb,0.55,0.3)||0x323a46);
+    [['l',-l],['r',r]].forEach(([k,sx])=>{if(!w[k])return;const c=rgbHex(w[k+'_rgb'],0.95,0.35);
+      hallQuad(g,[P(sx,z0,0),P(sx,L,0),P(sx,L,HALL_H),P(sx,z0,HALL_H)],c,{transparent:true,opacity:0.62,depthWrite:false});
+      const top=new THREE.BufferGeometry().setFromPoints([P(sx,z0,HALL_H),P(sx,L,HALL_H),P(sx,z0,0.02),P(sx,L,0.02)]);
+      g.add(new THREE.LineSegments(top,new THREE.LineBasicMaterial({color:0xcbd5e1,transparent:true,opacity:0.7})))})});
+}
+// the photo from each snapshot, floating above the place it was taken (click = full size)
+function buildPhotos(meta){
+  const box=$('d3photos');box.innerHTML='';D3.ph=[];
+  const shots=meta.stamps.filter(s=>s.photo).sort((a,b)=>a.ts-b.ts);
+  const N={};meta.nodes.forEach(nd=>N[nd.id]=nd);
+  const list=shots.map(s=>({photo:s.photo,place:(N[s.node]||{}).name||'',ago:new Date(s.ts*1000).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}));
+  shots.forEach((s,i)=>{const el=document.createElement('img');el.src=s.photo;el.title=list[i].place;el.onclick=()=>lbOpen(list,i);box.appendChild(el);D3.ph.push({x:s.x,y:s.y,el})});
+}
+function d3raw(){D3.raw=!D3.raw;D3.wmesh.visible=D3.mode==='world'&&D3.raw;$('d3rawBtn').classList.toggle('on',D3.raw);d3draw()}
+// walk-through: the camera follows the path you walked, at eye height
+function d3walk(){
+  if(D3.fly){D3.fly=null;$('d3walkBtn').textContent='▶ Walk it';renderWorld(false);return}
+  const M=D3.wmeta;if(!M)return;
+  let P=(M.trail||[]).slice();
+  if(P.length<2)P=M.stamps.slice().sort((a,b)=>a.ts-b.ts).map(s=>[s.x,s.y]);
+  if(P.length<2){toast('Walk a bit first');return}
+  const Q=P.map((p,i)=>{let sx=0,sy=0,n=0;for(let k=Math.max(0,i-2);k<=Math.min(P.length-1,i+2);k++){sx+=P[k][0];sy+=P[k][1];n++}return [sx/n,sy/n]});
+  const cum=[0];for(let i=1;i<Q.length;i++)cum.push(cum[i-1]+Math.hypot(Q[i][0]-Q[i-1][0],Q[i][1]-Q[i-1][1]));
+  const len=cum[cum.length-1];if(len<1){toast('Walk a bit first');return}
+  D3.fly={P:Q,cum,len,t0:performance.now(),speed:Math.max(2.5,len/25),dir:null};
+  $('d3walkBtn').textContent='■ Stop';D3.you.visible=false;requestAnimationFrame(flyStep);
+}
+function flyAt(f,s){let i=1;while(i<f.cum.length-1&&f.cum[i]<s)i++;const a=f.P[i-1],b=f.P[i],seg=(f.cum[i]-f.cum[i-1])||1,t=Math.max(0,Math.min(1,(s-f.cum[i-1])/seg));return [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]}
+function flyStep(now){
+  const f=D3.fly;if(!f||D3.mode!=='world')return;
+  const s=Math.min(f.len,(now-f.t0)/1000*f.speed),p=flyAt(f,s),q=flyAt(f,Math.min(f.len,s+3));
+  let dx=q[0]-p[0],dy=q[1]-p[1];const n=Math.hypot(dx,dy);
+  if(n>0.2){dx/=n;dy/=n;f.dir=f.dir?[f.dir[0]*0.9+dx*0.1,f.dir[1]*0.9+dy*0.1]:[dx,dy]}
+  const dir=f.dir||[0,1];
+  D3.cam.position.copy(W3(p[0],p[1],1.6));D3.cam.lookAt(W3(p[0]+dir[0]*4,p[1]+dir[1]*4,1.35));d3draw();
+  if(s>=f.len){setTimeout(()=>{if(D3.fly===f)d3walk()},900);return}
+  requestAnimationFrame(flyStep);
 }
 function d3big(){const p=$('d3panel');p.classList.toggle('big');$('d3bigBtn').textContent=p.classList.contains('big')?'⤡ Smaller':'⤢ Bigger';d3size()}
 async function render3D(){

@@ -9,6 +9,7 @@ like a hallway.
 World frame = the map's local meters: x east, y north, z up (eye height 1.6 m above ground).
 """
 import glob
+import json
 import math
 import os
 
@@ -20,6 +21,40 @@ U_MIN, U_MAX = -1.2, 4.0  # floor to ceiling (meters above the ground, with slac
 STAMP_STRIDE = 2          # keep every 2nd cell of the depth map (72x128 -> 36x64 vertices)
 MAX_STAMPS = 400
 MAGIC = 0xBEAC0003
+WALL_U = (0.4, 2.0)       # wall evidence: cells at body height...
+WALL_Z = (0.7, 7.0)       # ...0.7-7 m ahead...
+WALL_X = (0.35, 3.0)      # ...0.35-3 m to the side (farther than 3 m = open space, not a hallway wall)
+
+
+def corridor(xc, yc, z, color):
+    """What a hallway looks like from here, measured from the depth map (camera frame:
+    xc right, yc up, z forward, meters): the distance to the wall on each side, the walls'
+    and floor's colors, how far each wall runs and how far it's open straight ahead.
+    A side wall is a band of cells at body height whose sideways distance hardly changes
+    while their depth does; a wall you're facing is the opposite and doesn't count."""
+    u = yc + EYE_M
+    band = (u > WALL_U[0]) & (u < WALL_U[1]) & (z > WALL_Z[0]) & (z < WALL_Z[1])
+    out = {}
+    for side, sel in (("l", band & (xc < -WALL_X[0])), ("r", band & (xc > WALL_X[0]))):
+        if sel.sum() < 12:
+            continue
+        ax, zz = np.abs(xc[sel]), z[sel]
+        half = float(np.median(ax))
+        iqr_x = float(np.subtract(*np.percentile(ax, [75, 25])))
+        iqr_z = float(np.subtract(*np.percentile(zz, [75, 25])))
+        if half > WALL_X[1] or iqr_z < 0.5 or iqr_x > 0.5 * iqr_z:
+            continue   # open space, or a wall in front of you rather than beside you
+        near = sel & (np.abs(np.abs(xc) - half) < 0.4)
+        out[side] = round(half, 2)
+        out[side + "_len"] = round(float(np.percentile(z[near], 97)) if near.any() else float(np.percentile(zz, 97)), 1)
+        out[side + "_rgb"] = [int(v) for v in np.median(color[near if near.any() else sel], axis=0)]
+    floor = (u < 0.25) & (z < WALL_Z[1])
+    if floor.sum() >= 12:
+        out["floor_rgb"] = [int(v) for v in np.median(color[floor], axis=0)]
+    ch, cw = z.shape
+    mid = z[int(ch * 0.35):int(ch * 0.65), int(cw * 0.4):int(cw * 0.6)]
+    out["ahead"] = round(float(min(np.median(mid), 20.0)), 1)
+    return out
 
 
 class World:
@@ -36,21 +71,27 @@ class World:
                     continue
                 nid = int(os.path.basename(f)[1:-4])
                 self.stamps[nid] = {"xyz": d["xyz"], "rgb": d["rgb"], "depth": d["depth"], "x": float(d["x"]), "y": float(d["y"]),
-                                    "heading": float(d["heading"]), "ts": float(d["ts"])}
+                                    "heading": float(d["heading"]), "ts": float(d["ts"]),
+                                    "walls": json.loads(str(d["walls"])) if "walls" in d else {}}
             except Exception:
                 pass
 
     def has(self, nid):
         return nid in self.stamps
 
-    def add(self, nid, depth_m, color, x, y, heading, ts):
-        """Freeze this frame's cloud at place `nid`, standing at (x, y) facing `heading`."""
+    def photo_path(self, nid):
+        return os.path.join(self.path, f"n{nid}.jpg")
+
+    def add(self, nid, depth_m, color, x, y, heading, ts, photo=None):
+        """Freeze this frame's cloud at place `nid`, standing at (x, y) facing `heading`.
+        `photo` = the camera frame as JPEG bytes (shown above the place in the 3D view)."""
         ch, cw = depth_m.shape
         f = (cw / 2) / math.tan(math.radians(75.0 / 2))
         us, vs = np.meshgrid(np.arange(cw, dtype=np.float32), np.arange(ch, dtype=np.float32))
         z = depth_m.astype(np.float32)
         xc = (us - cw / 2 + 0.5) / f * z          # camera: right
         yc = -(vs - ch / 2 + 0.5) / f * z         # camera: up
+        walls = corridor(xc, yc, z, color)
         s = STAMP_STRIDE
         xc, yc, z = xc[::s, ::s], yc[::s, ::s], z[::s, ::s]
         h = math.radians(heading)
@@ -61,21 +102,26 @@ class World:
         xyz[(z >= STAMP_MAX_M) | (u < U_MIN) | (u > U_MAX)] = np.nan
         rgb = np.ascontiguousarray(color[::s, ::s]).astype(np.uint8)
         depth = np.ascontiguousarray(z).astype(np.float32)
-        self.stamps[nid] = {"xyz": xyz, "rgb": rgb, "depth": depth, "x": x, "y": y, "heading": heading, "ts": ts}
+        self.stamps[nid] = {"xyz": xyz, "rgb": rgb, "depth": depth, "x": x, "y": y, "heading": heading, "ts": ts, "walls": walls}
+        if photo:
+            with open(self.photo_path(nid), "wb") as fh:
+                fh.write(photo)
         if len(self.stamps) > MAX_STAMPS:
             old = min(self.stamps, key=lambda k: self.stamps[k]["ts"])
             self.remove(old)
-        np.savez_compressed(os.path.join(self.path, f"n{nid}.npz"), xyz=xyz, rgb=rgb, depth=depth, x=x, y=y, heading=heading, ts=ts)
+        np.savez_compressed(os.path.join(self.path, f"n{nid}.npz"), xyz=xyz, rgb=rgb, depth=depth, x=x, y=y, heading=heading, ts=ts,
+                            walls=np.array(json.dumps(walls)))
         self._blob = None
         self.rev += 1
         return int(np.isfinite(xyz[..., 0]).sum())
 
     def remove(self, nid):
         self.stamps.pop(nid, None)
-        try:
-            os.remove(os.path.join(self.path, f"n{nid}.npz"))
-        except OSError:
-            pass
+        for f in (os.path.join(self.path, f"n{nid}.npz"), self.photo_path(nid)):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
         self._blob = None
         self.rev += 1
 
@@ -106,4 +152,6 @@ class World:
 
     def meta(self):
         return [{"node": k, "x": round(s["x"], 1), "y": round(s["y"], 1), "heading": round(s["heading"]),
-                 "n": int(np.isfinite(s["xyz"][..., 0]).sum()), "ts": s["ts"]} for k, s in self.stamps.items()]
+                 "n": int(np.isfinite(s["xyz"][..., 0]).sum()), "ts": s["ts"], "walls": s.get("walls") or {},
+                 "photo": f"/world/photo/{k}.jpg?{int(s['ts'])}" if os.path.exists(self.photo_path(k)) else None}
+                for k, s in self.stamps.items()]

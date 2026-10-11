@@ -151,6 +151,35 @@ spread = float(np.ptp(p0[:, 1]))
 check(2 < spread < 60, f"…and spread sideways across the hallway ({spread:.1f} m wide)")
 rev0 = wj["rev"]
 
+# 6b. the hallway: wall distances measured from depth (known geometry), the photo from each place, the walked trail
+def corridor_scene(hl=1.3, hr=1.3, length=20.0, face=None, cw=72, ch=128):
+    f = (cw / 2) / math.tan(math.radians(37.5))
+    us, vs = np.meshgrid(np.arange(cw) + 0.5, np.arange(ch) + 0.5)
+    dx, dy = (us - cw / 2) / f, -(vs - ch / 2) / f
+    with np.errstate(divide="ignore", invalid="ignore"):
+        zs = [np.full((ch, cw), length if face is None else face), np.where(dy < 0, -1.6 / dy, np.inf), np.where(dy > 0, 1.1 / dy, np.inf)]
+        if hl:
+            zs.append(np.where(dx < 0, -hl / dx, np.inf))
+        if hr:
+            zs.append(np.where(dx > 0, hr / dx, np.inf))
+    z = np.minimum.reduce(zs).astype(np.float32)
+    return dx * z, dy * z, z, np.full((ch, cw, 3), 120, np.uint8)
+
+
+w = world_mod.corridor(*corridor_scene())
+check(abs(w.get("l", 0) - 1.3) < 0.1 and abs(w.get("r", 0) - 1.3) < 0.1, f"2.6 m hallway measured: left {w.get('l')} m, right {w.get('r')} m")
+w = world_mod.corridor(*corridor_scene(hl=0.6, hr=2.0))
+check(abs(w.get("l", 0) - 0.6) < 0.1 and abs(w.get("r", 0) - 2.0) < 0.15, f"walking near the left wall: left {w.get('l')} m, right {w.get('r')} m")
+w = world_mod.corridor(*corridor_scene(hl=4, hr=4, face=3.0))
+check("l" not in w and "r" not in w, "a wall straight ahead is not mistaken for side walls")
+w = world_mod.corridor(*corridor_scene(hl=None, hr=None, length=15))
+check("l" not in w and "r" not in w, "open space: no walls")
+st0 = wj["stamps"][0]
+check(all("walls" in s for s in wj["stamps"]) and st0["photo"], "every snapshot carries its wall measurements and a photo")
+ph = c.get(st0["photo"])
+check(ph.status_code == 200 and ph.headers["content-type"] == "image/jpeg" and len(ph.content) > 2000, f"photo served ({len(ph.content) // 1024} KB)")
+check(len(wj["trail"]) >= 5, f"walked trail for the walk-through: {len(wj['trail'])} points")
+
 # 7. snapshot on demand (button / voice) replaces the one at this place; clear empties the world
 nid = p["node_id"]
 old_ts = [s for s in wj["stamps"] if s["node"] == nid][0]["ts"]
@@ -167,6 +196,7 @@ c.post("/world/clear")
 check(c.get("/state").json()["world_stamps"] == 0 and c.get("/world.json").json()["n_points"] == 0, "clear: world empty")
 check(np.frombuffer(c.get("/world.bin").content[:16], np.uint32)[1] == 0 and c.get("/world.json").json()["rev"] > rev0, "…and world.bin is empty too (revision moved on, so the dashboard refetches)")
 check(c.get("/world.json").json()["nodes"], "the map (places + paths) is kept, only the 3D is gone")
+check(c.get(st0["photo"]).status_code == 404, "…photos are deleted with it")
 
 # 8. GPS comes back good outdoors: the fix wins again
 r = frame(hall, fix=(p["x"], p["y"] + 2), acc=5, heading=0, steps=T["steps"])

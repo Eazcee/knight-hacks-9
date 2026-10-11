@@ -24,7 +24,7 @@ FACE_W_M = 0.15
 CLOUD_W = 72                  # point cloud columns (rows follow the frame's aspect)
 NEAR_M = 1.8                  # "obstacle" = most of the path band closer than this
 OBSTACLE_FRAMES = 3           # ...for this many frames in a row
-FLOOR_M = 2.0                 # with a level head the floor at the bottom-centre of the frame is ~2 m away (eye 1.6 m)
+EYE_M = 1.6                   # eye height: with a level head the floor at the bottom of the frame is where the rays from here hit it
 FACE_SCALE_TTL = 10.0         # a face sets the scale; after this many seconds the floor keeps it
 MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
@@ -55,6 +55,7 @@ class DepthEngine:
         self.scale_ts = 0.0
         self.face_ts = 0.0
         self.scale_src = None         # faces | floor
+        self.shift = 0.0              # the net's output = scale/meters + shift (MiDaS is affine in inverse depth); the floor fit finds it
         self.near_streak = 0
         self.last = None              # last result dict
         self.ms = 0.0
@@ -88,7 +89,7 @@ class DepthEngine:
             d_face = float(np.clip(f * FACE_W_M / px, 0.4, 12.0))
             r = self._rel_in_box(rel, (x1, y1, x2, y2), W, H)
             if r is not None:
-                ks.append(d_face * r)
+                ks.append(d_face * max(r - self.shift, 1e-3))
         if ks:
             k = float(np.median(ks))
             self.scale = k if self.scale is None else 0.7 * self.scale + 0.3 * k
@@ -97,18 +98,27 @@ class DepthEngine:
         return self.scale
 
     def calibrate_floor(self, rel):
-        """No face around: the floor keeps the scale. The net's output is only relative *per frame*,
-        so without this every frame would get a different idea of a meter; the bottom-centre of a
-        level frame is floor ~2 m away, which pins it well enough for snapshots and obstacles."""
+        """No face around: the floor keeps the scale. The net's output is only relative *per frame*
+        (inverse depth up to a scale), so without this every frame gets a different idea of a meter.
+        With a level head, row v of the frame looks down at a known angle, so the floor there is a
+        known distance away (eye height 1.6 m): the net's output at the bottom rows pins the scale."""
         ch, cw = rel.shape
-        patch = rel[int(ch * 0.9):, int(cw * 0.4):int(cw * 0.6)]
-        if patch.size == 0:
+        f = (cw / 2) / np.tan(np.radians(HFOV_DEG / 2))
+        r0 = int(ch * 0.72)
+        down = (np.arange(r0, ch, dtype=np.float32) - ch / 2 + 0.5) / f
+        if r0 >= ch or down.min() <= 0:
             return self.scale
-        k = FLOOR_M * float(np.median(patch))
+        q = down / EYE_M                                          # 1 / floor distance, per row
+        r = np.median(rel[r0:, int(cw * 0.35):int(cw * 0.65)], axis=1)
+        # scale only: fitting the shift as well (MiDaS is affine in inverse depth) was tried and made
+        # things worse; the floor rows are too short a lever to extrapolate a shift to the end of a hall
+        n = max(2, len(r) // 3)
+        k, b = float(np.median(r[-n:] / q[-n:])), 0.0
         if self.scale is None:
-            self.scale = k
+            self.scale, self.shift = k, b
         elif time.time() - self.face_ts > FACE_SCALE_TTL:
             self.scale = 0.8 * self.scale + 0.2 * k
+            self.shift = 0.8 * self.shift + 0.2 * b
         else:
             return self.scale
         self.scale_ts = time.time()
@@ -133,15 +143,17 @@ class DepthEngine:
         """Meters per cell. Without any face yet, assume the middle of the scene is ~4 m away."""
         k = self.scale
         if k is None:
-            k = 4.0 * float(np.median(rel))
-        return np.clip(k / rel, 0.2, 60.0)
+            return np.clip(4.0 * float(np.median(rel)) / rel, 0.2, 60.0)
+        d = rel - self.shift
+        return np.where(d > 1e-6, np.clip(k / np.maximum(d, 1e-6), 0.2, 60.0), 60.0).astype(np.float32)
 
     def distance_to(self, rel, box, W, H):
         r = self._rel_in_box(rel, box, W, H)
         if r is None:
             return None
-        k = self.scale if self.scale is not None else 4.0 * float(np.median(rel))
-        return float(np.clip(k / r, 0.2, 60.0))
+        if self.scale is None:
+            return float(np.clip(4.0 * float(np.median(rel)) / r, 0.2, 60.0))
+        return float(np.clip(self.scale / max(r - self.shift, 1e-6), 0.2, 60.0))
 
     # ---- obstacles -----------------------------------------------------
     def obstacle(self, depth_m, faces, W, H):

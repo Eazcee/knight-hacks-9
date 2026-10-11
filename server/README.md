@@ -38,6 +38,11 @@ On the dashboard's Watchlist, **Search area** (for someone who was seen at a kno
 ### 3D from the camera (depth)
 A depth net (MiDaS small, downloaded on first start to `data/models/`, ~66 MB) estimates how far every pixel is. Faces set the real-world scale (a face is ~15 cm wide), so the whole frame gets meters. It feeds: the **3D view** panel (point cloud of what the wearer sees, orbit with the mouse, faces labeled with distance), **real distances** for people's pins, and **automatic blocking**: while following a route, if most of the path band ahead is closer than 1.8 m for 3 frames and it isn't a person, that stretch of the map is blocked and the route re-plans (glasses: `BLOCKED AHEAD · rerouting`). `BEACON_DEPTH=0` turns it off, `BEACON_AUTO_BLOCK=0` keeps the 3D but never blocks. `GET /cloud.bin` is the point cloud (layout in `depth.py`).
 
+### The 3D world (indoors too)
+**World** in the 3D panel is everywhere you walked, in 3D. Every time the map makes a place (every ~8 m, and whenever you say `snapshot` / press 📸), the depth map of that moment is frozen, turned to the heading you faced and pinned where you stood (`world.py`, one `.npz` per place in `data/world/`). Each snapshot keeps its grid, so the dashboard draws it as a surface (triangles between neighbouring cells, split where the depth jumps) instead of loose dots: walk a hallway and turn a corner and you get the hallway with the corner, with the places, paths, people's pins and you (blue arrow) in it. `⤢ Bigger` makes the panel full width.
+
+**Indoors there is no usable GPS**, so position comes from two things the phone and glasses already have: the **step counter** (0.72 m a step) and the **glasses' compass** (the app sends `heading=` from the glasses' magnetometer + accelerometer with every frame). While both are fresh, the server dead-reckons (`quality: dr`) and *ignores* the phone's rough Wi-Fi/cell fixes (a 30–50 m guess would otherwise yank you around). Drift grows ~5 % of the distance walked; the first good GPS fix outside takes over again. `GET /world.bin` (surfaces, layout in `world.py`), `GET /world.json` (places/paths/pins/you in local meters), `POST /world/snapshot`, `POST /world/clear`. `/map/clear` and `/reset` clear it too.
+
 ## 1. Run it (5 minutes)
 
 ```bash
@@ -51,6 +56,8 @@ Test everything with no hardware:
 python test_demo.py          # simulated walk + people + alert + reroute (all should PASS)
 python test_training.py      # photos, quality, train mode, merge, remove, map clear (all should PASS)
 python test_range.py         # far faces, "possible" alerts, Scan on a 12 MP photo (all should PASS)
+python test_depth.py         # distances from depth, point cloud, a wall ahead -> automatic reroute
+python test_world.py         # indoors: steps + compass dead reckoning, 3D snapshots per place, world.bin
 python sim_walk.py --reset   # fake GPS walk: watch the map build, pins appear, a route draw and reroute
 python webcam_client.py --show --lat 28.6024 --lng -81.2001   # laptop webcam → server, faces get pins
 ```
@@ -62,7 +69,7 @@ Speed: ~1.3 s/frame on a weak 2-core box; expect 150–400 ms on a laptop. Send 
 
 | Call | What it does |
 |---|---|
-| `POST /frame?lat=&lng=&acc=&heading=&steps=` body = JPEG (`Content-Type: image/jpeg`) | The whole pipeline. Returns `people`, `place` (position, quality, events), `alerts`, `nav` (the current turn, if a route is active) and a ready-to-render `display` card `{level, title, lines}` for the glasses. `lat/lng/acc` = phone GPS (meters); `heading` (0 = north, clockwise) and `steps` (cumulative pedometer) are optional. Without GPS nothing goes on the map. |
+| `POST /frame?lat=&lng=&acc=&heading=&steps=` body = JPEG (`Content-Type: image/jpeg`) | The whole pipeline. Returns `people`, `place` (position, quality, events), `alerts`, `nav` (the current turn, if a route is active) and a ready-to-render `display` card `{level, title, lines}` for the glasses. `lat/lng/acc` = phone GPS (meters); `heading` (0 = north, clockwise, from the glasses' compass) and `steps` (cumulative pedometer) are optional but together they are what works indoors (dead reckoning takes over when GPS is rough). Without any position nothing goes on the map. |
 | `POST /scan` body = JPEG (any size, e.g. a 12 MP photo) | **Scan the room.** Tiled full-res search; every face matched (with `dir` left/ahead/right and `px`); returns `display` (held on the glasses ~8 s). Voice `scan` makes `/command` return `action: "scan"` so the app knows to take the photo. |
 | `POST /people/{id}` JSON `{name, notes, append_note}` | Name / annotate someone. |
 | `POST /enroll` multipart `image`, `name`, `notes` | Enroll from a photo (selfie). If the face is already known, the info attaches to that person. |

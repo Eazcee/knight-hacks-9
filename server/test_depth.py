@@ -101,10 +101,14 @@ wall = np.full((1280, 720, 3), 90, np.uint8)
 cv2.rectangle(wall, (0, 0), (720, 1280), (60, 60, 70), -1)
 noise = np.random.default_rng(1).integers(0, 30, (1280, 720, 3), dtype=np.uint8)
 wall = cv2.add(wall, noise)
-# fake the depth net for determinism: everything ahead is 1 m away
+# fake the depth net for determinism: a wall 1 m ahead across the middle of the view, the ceiling/sky above it far away
 real_infer = server.depth.infer
-server.depth.infer = lambda img: (np.full((128, 72), 40.0, np.float32), np.zeros((128, 72, 3), np.uint8))
+fake_rel = np.full((128, 72), 40.0, np.float32)
+fake_rel[:30] = 5.0              # top of the view: 8 m
+fake_rel[115:] = 20.0            # floor at the bottom: 2 m (that's what keeps the scale without faces)
+server.depth.infer = lambda img: (fake_rel.copy(), np.zeros((128, 72, 3), np.uint8))
 server.depth.scale = 40.0 * 1.0   # 1 m
+server.depth.face_ts = time.time()
 res, evs = None, []
 for i in range(4):
     res = frame(wall, 0.5, 1 + i, heading=0)
@@ -119,6 +123,16 @@ blocked_n = sum(1 for e in m["edges"] if e["blocked"])
 for i in range(4):
     res = frame(wall, 0.5, 5 + i, heading=0)
 check(sum(1 for e in c.get("/map").json()["edges"] if e["blocked"]) == blocked_n, "cooldown: not blocking again right away")
+server.depth.infer = real_infer
+
+# 2b. a frame where *everything* reads near (the net's scale is off) must not block anything
+server.depth.near_streak = 0
+server.depth.infer = lambda img: (np.full((128, 72), 40.0, np.float32), np.zeros((128, 72, 3), np.uint8))
+server.depth.face_ts = time.time()
+for i in range(4):
+    frame(wall, 0.5, 9 + i, heading=0)
+ob = c.get("/state").json()["depth"]["obstacle"]
+check(not ob["blocked"], f"whole frame 'near' (scale off) is not an obstacle (near={ob['near']}, blocked={ob['blocked']})")
 server.depth.infer = real_infer
 
 # 3. faces close up are not obstacles

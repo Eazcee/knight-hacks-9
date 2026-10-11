@@ -35,6 +35,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .panel h2 .right{margin-left:auto;display:flex;gap:6px}
 .top{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px}
 .d3wrap{position:relative;background:#06080b;border-radius:10px;overflow:hidden;aspect-ratio:16/10;max-height:420px}
+.top .panel.big{grid-column:1/-1}.panel.big .d3wrap{aspect-ratio:auto;height:72vh;max-height:none}
 #d3{width:100%;height:100%;display:block;cursor:grab}
 #d3labels{position:absolute;inset:0;pointer-events:none}
 #d3labels .d3l{position:absolute;transform:translate(-50%,-100%);background:rgba(14,16,19,.85);border:1px solid #4cc38a;border-radius:6px;padding:2px 7px;font-size:12px;white-space:nowrap}
@@ -212,10 +213,13 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
         <div class="live" id="live"><div class="empty">Waiting for the glasses…<br><small>Start streaming in the Beacon app</small></div></div>
       </div>
       <div class="panel" id="d3panel">
-        <h2>3D view <span class="muted" id="d3info" style="text-transform:none;letter-spacing:0;font-weight:400"></span>
-          <span class="right"><button class="ghost" onclick="d3reset()">Reset view</button></span></h2>
+        <h2>3D view
+          <span class="right"><button id="d3live" class="primary" onclick="d3mode('live')">Live</button><button id="d3world" onclick="d3mode('world')">World</button>
+          <button onclick="api('/world/snapshot',{method:'POST'}).then(r=>toast('Snapshot saved · '+r.stamps+' places in 3D')).catch(()=>{})" title="Freeze the current 3D view at this spot">📸 Snapshot</button>
+          <button class="ghost" onclick="d3reset()" title="Reset the camera angle">↺</button><button class="ghost" id="d3bigBtn" onclick="d3big()">⤢ Bigger</button></span></h2>
+        <div class="muted" id="d3info" style="font-size:12px;margin:-4px 0 8px;min-height:14px"></div>
         <div class="d3wrap"><canvas id="d3"></canvas><div id="d3labels"></div><div class="d3empty" id="d3empty">Depth appears when the glasses stream.<br><small>Drag to orbit · wheel to zoom</small></div></div>
-        <small class="muted">What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.</small>
+        <small class="muted" id="d3help">What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.</small>
       </div>
       <div class="col">
         <div class="panel">
@@ -333,40 +337,101 @@ function renderLive(){
   $('liveInfo').textContent=lp.join(' · ');
 }
 // ---------------- 3D view (point cloud from the depth net)
-const D3={ready:false,pts:null,geo:null,cam:null,scene:null,ren:null,az:Math.PI,el:0.35,dist:6,tgt:null,drag:null,busy:false,last:0,n:0};
+const D3={ready:false,pts:null,geo:null,cam:null,scene:null,ren:null,az:Math.PI,el:0.35,dist:6,tgt:null,drag:null,busy:false,last:0,n:0,
+  mode:'live',wmesh:null,wmat:null,wgroup:null,wrev:-1,wn:0,you:null,cone:null};
+function d3mode(m){D3.mode=m;$('d3live').className=m==='live'?'primary':'';$('d3world').className=m==='world'?'primary':'';
+  if(D3.ready){D3.grid.position.y=m==='world'?0:-1.6;D3.pts.visible=m==='live';D3.wmesh.visible=m==='world';D3.wgroup.visible=m==='world';D3.cone.visible=m==='live';D3.you.visible=m==='world';
+    if(m==='world'){D3.az=Math.PI*0.8;D3.el=0.7;D3.dist=28;renderWorld(true)}else{D3.tgt.set(0,0,4);d3reset()}}
+  $('d3help').textContent=m==='live'?'What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.'
+    :'Everywhere you walked, in 3D: a snapshot of the cloud at every place the map made (every ~8 m), turned to your heading and pinned where you stood. Indoors this uses steps + the glasses\' compass. 📸 Snapshot saves one right here.';
+}
 function d3init(){
   if(D3.ready||!window.THREE)return;
   const cv=$('d3');const wrap=cv.parentElement;
   D3.ren=new THREE.WebGLRenderer({canvas:cv,antialias:false});D3.ren.setPixelRatio(Math.min(2,window.devicePixelRatio||1));
   D3.scene=new THREE.Scene();D3.scene.background=new THREE.Color(0x06080b);
   D3.cam=new THREE.PerspectiveCamera(55,16/10,0.05,200);D3.tgt=new THREE.Vector3(0,0,4);
-  const grid=new THREE.GridHelper(40,40,0x2a313a,0x1a1f26);grid.position.y=-1.6;D3.scene.add(grid);
+  const grid=new THREE.GridHelper(200,200,0x2a313a,0x1a1f26);grid.position.y=-1.6;D3.scene.add(grid);D3.grid=grid;
   // the wearer: a small cone at the origin pointing forward (+z)
-  const cone=new THREE.Mesh(new THREE.ConeGeometry(0.12,0.35,12),new THREE.MeshBasicMaterial({color:0x3b82f6}));cone.rotation.x=Math.PI/2;D3.scene.add(cone);
+  const cone=new THREE.Mesh(new THREE.ConeGeometry(0.12,0.35,12),new THREE.MeshBasicMaterial({color:0x3b82f6}));cone.rotation.x=Math.PI/2;D3.scene.add(cone);D3.cone=cone;
+  // world mode: all snapshots + places/paths/people + you
+  D3.wmat=new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide});D3.wmesh=new THREE.Group();D3.wmesh.visible=false;D3.scene.add(D3.wmesh);
+  D3.wgroup=new THREE.Group();D3.wgroup.visible=false;D3.scene.add(D3.wgroup);
+  D3.you=new THREE.Mesh(new THREE.ConeGeometry(0.35,1.0,12),new THREE.MeshBasicMaterial({color:0x3b82f6}));D3.you.visible=false;D3.scene.add(D3.you);
   D3.geo=new THREE.BufferGeometry();
   D3.pts=new THREE.Points(D3.geo,new THREE.PointsMaterial({size:0.07,vertexColors:true,sizeAttenuation:true}));D3.scene.add(D3.pts);
   cv.addEventListener('mousedown',e=>{D3.drag=[e.clientX,e.clientY];cv.style.cursor='grabbing'});
   window.addEventListener('mouseup',()=>{D3.drag=null;cv.style.cursor='grab'});
   window.addEventListener('mousemove',e=>{if(!D3.drag)return;D3.az-=(e.clientX-D3.drag[0])*0.008;D3.el=Math.max(-1.2,Math.min(1.4,D3.el+(e.clientY-D3.drag[1])*0.006));D3.drag=[e.clientX,e.clientY];d3draw()});
-  cv.addEventListener('wheel',e=>{e.preventDefault();D3.dist=Math.max(1.5,Math.min(40,D3.dist*(e.deltaY>0?1.12:0.9)));d3draw()},{passive:false});
+  cv.addEventListener('wheel',e=>{e.preventDefault();D3.dist=Math.max(1.5,Math.min(D3.mode==='world'?160:40,D3.dist*(e.deltaY>0?1.12:0.9)));d3draw()},{passive:false});
   D3.ready=true;d3size();window.addEventListener('resize',d3size);
 }
 function d3size(){const cv=$('d3'),w=cv.clientWidth||600,h=cv.clientHeight||375;D3.ren.setSize(w,h,false);D3.cam.aspect=w/h;D3.cam.updateProjectionMatrix();d3draw()}
-function d3reset(){D3.az=Math.PI;D3.el=0.35;D3.dist=6;d3draw()}
+function d3reset(){if(D3.mode==='world'){D3.az=Math.PI*0.8;D3.el=0.7;D3.dist=28}else{D3.az=Math.PI;D3.el=0.35;D3.dist=6}d3draw()}
 function d3draw(){
   if(!D3.ready)return;
   const t=D3.tgt;D3.cam.position.set(t.x+D3.dist*Math.cos(D3.el)*Math.sin(D3.az),t.y+D3.dist*Math.sin(D3.el),t.z+D3.dist*Math.cos(D3.el)*Math.cos(D3.az));
   D3.cam.lookAt(t);D3.ren.render(D3.scene,D3.cam);
   // name labels at each face's 3D position
-  const L=$('d3labels');const faces=(S&&S.depth&&S.depth.faces)||[];const w=$('d3').clientWidth,h=$('d3').clientHeight;
+  const L=$('d3labels');const w=$('d3').clientWidth,h=$('d3').clientHeight;
+  if(D3.mode==='world'){const items=[];(D3.wgroup?D3.wgroup.children:[]).forEach(m=>{if(!m.userData||!m.userData.label)return;const v=m.position.clone().add(new THREE.Vector3(0,0.5,0)).project(D3.cam);if(v.z>1)return;
+      items.push(`<div class="d3l ${m.userData.watch?'watch':''}" style="left:${(v.x+1)/2*w}px;top:${(1-v.y)/2*h}px">${esc(m.userData.label)}</div>`)});
+    (D3.wmeta?D3.wmeta.nodes.filter(nd=>nd.named):[]).forEach(nd=>{const v=W3(nd.x,nd.y,0.5).project(D3.cam);if(v.z>1)return;items.push(`<div class="d3l" style="border-color:#3b82f6;left:${(v.x+1)/2*w}px;top:${(1-v.y)/2*h}px">${esc(nd.name)}</div>`)});
+    L.innerHTML=items.join('');return}
+  const faces=(S&&S.depth&&S.depth.faces)||[];
   L.innerHTML=faces.map(f=>{const v=new THREE.Vector3(f.xyz[0],f.xyz[1]+0.15,f.xyz[2]).project(D3.cam);if(v.z>1)return '';
     return `<div class="d3l ${f.is_watch?'watch':''}" style="left:${(v.x+1)/2*w}px;top:${(1-v.y)/2*h}px">${esc(f.name)} · ${f.dist_m} m</div>`}).join('');
 }
+const W3=(x,y,z)=>new THREE.Vector3(x,z!==undefined?z:0,-y);   // world (east,north,up) -> three (x,y,-z)
+async function renderWorld(force){
+  if(!D3.ready||D3.mode!=='world')return;
+  if(force||S.world_rev!==D3.wrev){
+    D3.wrev=S.world_rev;
+    try{const [rb,meta]=await Promise.all([fetch('/world.bin?'+Date.now()),api('/world.json')]);const buf=await rb.arrayBuffer();
+      const M=D3.wmesh;while(M.children.length){const m=M.children[0];M.remove(m);m.geometry.dispose()}
+      const hd=new Uint32Array(buf,0,4);let off=16,total=0;
+      if(hd[0]===0xBEAC0003)for(let si=0;si<hd[1];si++){const r=stampMesh(buf,off);off=r.next;if(r.mesh){M.add(r.mesh);total+=r.n}}
+      // places, paths, people
+      const g=D3.wgroup;while(g.children.length)g.remove(g.children[0]);
+      const N={};meta.nodes.forEach(nd=>N[nd.id]=nd);
+      meta.nodes.forEach(nd=>{const m=new THREE.Mesh(new THREE.SphereGeometry(nd.named?0.35:0.18,10,10),new THREE.MeshBasicMaterial({color:nd.named?0x3b82f6:0x9fb3c8}));m.position.copy(W3(nd.x,nd.y,0.1));g.add(m)});
+      meta.edges.forEach(e=>{const a=N[e.a],b=N[e.b];if(!a||!b)return;const gm=new THREE.BufferGeometry().setFromPoints([W3(a.x,a.y,0.1),W3(b.x,b.y,0.1)]);
+        g.add(new THREE.Line(gm,new THREE.LineBasicMaterial({color:e.blocked?0xef4444:0x6b7280})))});
+      if(meta.route&&meta.route.length){const pts=[W3(meta.you.x,meta.you.y,0.2)].concat(meta.route.map(p=>W3(p[0],p[1],0.2)));g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:0x4cc38a})))}
+      meta.pins.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(0.3,10,10),new THREE.MeshBasicMaterial({color:p.is_watch?0xef4444:(p.met?0x4cc38a:0xf59e0b)}));m.position.copy(W3(p.x,p.y,1.4));m.userData={label:p.name||'Unknown',watch:p.is_watch};g.add(m)});
+      D3.wmeta=meta;D3.wn=total;$('d3empty').style.display=total?'none':'block';if(!total)$('d3empty').innerHTML='No snapshots yet.<br><small>Walk (or press 📸 Snapshot) with GPS, or steps + the glasses\' compass indoors.</small>';
+    }catch(e){}
+  }
+  const you=(S.map&&S.map.position)||{};
+  if(you.x!=null){D3.you.position.copy(W3(you.x,you.y,0.8));
+    // cone points +y by default: lay it flat (-90° about x), then turn it to the compass heading (about world up = y)
+    D3.you.rotation.set(-Math.PI/2,-(you.heading||0)*Math.PI/180,0,'YXZ');
+    D3.tgt.lerp(W3(you.x,you.y,0),0.3)}
+  d3draw();
+}
+// one snapshot -> a surface: the depth grid's cells become triangles, except across depth jumps (edges of things)
+function stampMesh(buf,off){
+  const h=new Uint32Array(buf,off,4);const gw=h[1],gh=h[2];off+=16;const nv=gw*gh;
+  const xyz=new Float32Array(buf,off,nv*3);off+=nv*12;const dep=new Float32Array(buf,off,nv);off+=nv*4;
+  const rgb=new Uint8Array(buf,off,nv*3);off+=nv*3;off+=(4-(nv*3)%4)%4;
+  const pos=new Float32Array(nv*3),col=new Float32Array(nv*3);let n=0;
+  for(let i=0;i<nv;i++){const okv=isFinite(xyz[i*3]);if(okv)n++;
+    pos[i*3]=okv?xyz[i*3]:0;pos[i*3+1]=okv?xyz[i*3+2]:0;pos[i*3+2]=okv?-xyz[i*3+1]:0;
+    col[i*3]=rgb[i*3]/255;col[i*3+1]=rgb[i*3+1]/255;col[i*3+2]=rgb[i*3+2]/255}
+  const idx=[];const ok=(a,b,c)=>{const da=dep[a],db=dep[b],dc=dep[c];if(!isFinite(xyz[a*3])||!isFinite(xyz[b*3])||!isFinite(xyz[c*3]))return false;
+    const mx=Math.max(da,db,dc),mn=Math.min(da,db,dc);return mx-mn<0.5||mx/mn<1.35};
+  for(let r=0;r<gh-1;r++)for(let c=0;c<gw-1;c++){const a=r*gw+c,b=a+1,d=a+gw,e=d+1;if(ok(a,b,d))idx.push(a,d,b);if(ok(b,d,e))idx.push(b,d,e)}
+  if(!n)return {mesh:null,n:0,next:off};
+  const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.BufferAttribute(pos,3));geo.setAttribute('color',new THREE.BufferAttribute(col,3));geo.setIndex(idx);
+  return {mesh:new THREE.Mesh(geo,D3.wmat),n,next:off};
+}
+function d3big(){const p=$('d3panel');p.classList.toggle('big');$('d3bigBtn').textContent=p.classList.contains('big')?'⤡ Smaller':'⤢ Bigger';d3size()}
 async function render3D(){
+  if(D3.mode==='world'){d3init();if(D3.ready)renderWorld(false);$('d3info').textContent=`${S.world_stamps||0} snapshot${S.world_stamps===1?'':'s'}${D3.wn?' · '+(D3.wn/1000).toFixed(1)+'k points':''} · ${S.map&&S.map.position?({good:'GPS',dr:'steps + compass',rough:'rough fix',none:'no position'})[S.map.position.quality]||S.map.position.quality:''}`;return}
   if(!S.has_cloud){$('d3info').textContent=S.depth&&S.depth.error?'depth error: '+S.depth.error:(S.depth===null?'depth off':'');return}
   d3init();if(!D3.ready||D3.busy)return;
   const d=S.depth||{};
-  $('d3info').textContent=`${d.device||''} · ${d.ms||0} ms · ${d.calibrated?'scale from faces':'scale: guess (no face seen yet)'}${d.center_m?' · ahead '+d.center_m+' m':''}`+(d.obstacle&&d.obstacle.blocked?' · ':'');
+  $('d3info').textContent=`${d.device||''} · ${d.ms||0} ms · ${d.calibrated?'scale from '+(d.scale_src==='faces'?'faces':'the floor'):'scale: guess'}${d.center_m?' · ahead '+d.center_m+' m':''}`+(d.obstacle&&d.obstacle.blocked?' · ':'');
   if(d.obstacle&&d.obstacle.blocked)$('d3info').innerHTML+='<span class="obst">⚠ obstacle ahead</span>';
   if(Date.now()-D3.last<220)return;D3.busy=true;
   try{const r=await fetch('/cloud.bin?'+Date.now());if(!r.ok)return;const buf=await r.arrayBuffer();

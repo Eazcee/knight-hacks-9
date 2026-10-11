@@ -178,6 +178,8 @@ class GeoMap:
             elif self.lat is None:
                 self._set_position(lat, lng, ts)
                 self.acc, self.quality = acc, "rough"
+            elif self._dr_live(ts):
+                pass   # indoors with steps + a sensor heading: dead reckoning beats a 30 m Wi-Fi guess
             elif self.quality != "good" or ts - (self.fix_ts or 0) > 20:
                 # nothing better for a while: drift gently toward the rough fix
                 self._set_position(self.lat + 0.2 * (lat - self.lat), self.lng + 0.2 * (lng - self.lng), ts)
@@ -188,8 +190,12 @@ class GeoMap:
             nlat, nlng = offset_latlng(self.lat, self.lng, dist, self.heading)
             self._set_position(nlat, nlng, ts)
             moved = dist
+            if self.quality != "dr":
+                self.acc = min(self.acc or 10.0, 8.0)   # starting to dead-reckon: trust it about this much
             self.quality = "dr"
-            self.acc = (self.acc or 10.0) + dist * 0.15   # drift grows as we walk blind
+            self.acc = (self.acc or 8.0) + dist * 0.05   # drift grows as we walk blind (~5 %)
+        elif not trusted and self.quality == "dr" and self._dr_live(ts):
+            pass   # standing still indoors: keep the dead-reckoned position
 
         # movement gate: GPS jitter while standing still must not count as walking
         self.hist.append((ts, self.x, self.y))
@@ -245,6 +251,11 @@ class GeoMap:
         # route following
         self._follow(events)
         return self._result(events)
+
+    def _dr_live(self, ts):
+        """Dead reckoning is usable: a sensor heading and steps were seen recently."""
+        return (self.heading_src == "sensor" and ts - self.sensor_heading_ts < 10
+                and self.step_ts and ts - self.step_ts < 30)
 
     def _nearest_node(self, lat, lng, nodes=None, max_m=None):
         best, bd = None, float("inf")

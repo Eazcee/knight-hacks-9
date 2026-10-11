@@ -60,6 +60,10 @@ if os.environ.get("BEACON_DEPTH", "1") == "1":
     except Exception as _e:
         print("depth disabled:", _e)
 AUTO_BLOCK = os.environ.get("BEACON_AUTO_BLOCK", "1") == "1"
+from world import World  # noqa: E402
+world = World(os.path.join(DATA, "world"))
+last_dm = None            # latest metric depth map + colors, for snapshots
+last_color = None
 OBSTACLE_COOLDOWN_S = 20
 last_cloud = None
 last_depth = {}
@@ -496,6 +500,7 @@ def _pipeline(img, heading, steps, lat, lng, acc, ts):
                         faces=len(people) + len(faces.last_far))
     if obstacle and obstacle["blocked"]:
         _maybe_auto_block(place, ts)
+    _maybe_stamp(place, ts)
     _track_conversations(people, ts)
     for p in people:   # walking to someone and the camera sees them: that's the arrival
         if p["confirmed"] and not p.get("possible") and geo.found(p["person_id"]):
@@ -551,7 +556,8 @@ def _depth_step(img, people, ts):
         last_depth = {"error": str(e)[:120]}
         return None
     near_faces = [p for p in people if p.get("tier", "near") == "near"]
-    depth.calibrate(rel, near_faces, W, H)
+    if not depth.calibrate(rel, near_faces, W, H) or not near_faces:
+        depth.calibrate_floor(rel)
     dm = depth.metric(rel)
     faces_3d = []
     for p in people:
@@ -562,10 +568,25 @@ def _depth_step(img, people, ts):
                              "dist_m": round(d, 1), "is_watch": p["is_watch"], "met": bool((db.person(p["person_id"]) or {}).get("met"))})
     ob = depth.obstacle(dm, people + faces.last_far, W, H)
     last_cloud = depth.cloud(dm, color, W, H, ts, faces_3d)
+    global last_dm, last_color
+    last_dm, last_color = dm, color
     last_depth = {"device": depth.device, "ms": round(depth.ms), "scale": None if depth.scale is None else round(depth.scale, 1),
-                  "calibrated": depth.scale is not None, "obstacle": ob, "faces": faces_3d, "ts": ts,
+                  "calibrated": depth.scale is not None, "scale_src": depth.scale_src, "obstacle": ob, "faces": faces_3d, "ts": ts,
                   "center_m": round(float(np.median(dm[dm.shape[0] // 3: 2 * dm.shape[0] // 3, dm.shape[1] // 3: 2 * dm.shape[1] // 3])), 1)}
     return ob
+
+
+def _maybe_stamp(place, ts, force=False):
+    """A new place (or one without a snapshot yet): freeze the 3D cloud there."""
+    if last_dm is None or not geo.heading_known or geo.current_node is None:
+        return False
+    nid = geo.current_node
+    new_here = any(e.get("node_id") == nid and e["type"] in ("new_place", "arrived") for e in place.get("events", []))
+    if not (force or (new_here and not world.has(nid))):
+        return False
+    n = world.add(nid, last_dm, last_color, geo.x, geo.y, geo.heading, ts)
+    place.setdefault("events", []).append({"type": "snapshot", "node_id": nid, "points": n})
+    return True
 
 
 def _maybe_auto_block(place, ts):
@@ -640,6 +661,51 @@ async def scan(request: Request):
         return await run_in_threadpool(_scan, img, ts)
     finally:
         pipeline_lock.release()
+
+
+@app.get("/world.bin")
+def world_bin():
+    """Every 3D snapshot in world meters (layout in world.py)."""
+    return Response(world.blob(), media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/world.json")
+def world_json():
+    """What goes with the snapshots: places, paths, people and you, all in local meters (x east, y north)."""
+    pins = []
+    for p in _pins():
+        x, y = geo._xy(p["lat"], p["lng"])
+        pins.append({"id": p["id"], "name": p["name"], "x": round(x, 1), "y": round(y, 1), "met": p["met"], "is_watch": p["is_watch"]})
+    route = None
+    if geo.route:
+        route = [[round(v, 1) for v in geo._xy(w["lat"], w["lng"])] for w in geo.route["waypoints"][geo.route["i"]:]]
+    return {"stamps": world.meta(), "n_points": world.n_points(), "rev": world.rev,
+            "nodes": [{"id": n["id"], "name": geo.node_name(n), "named": bool(n["name"]), "x": round(n["x"] or 0, 1), "y": round(n["y"] or 0, 1)}
+                      for n in db.nodes() if n.get("lat") is not None],
+            "edges": [{"a": e["a"], "b": e["b"], "blocked": bool(e["blocked"])} for e in db.edges() if e["a"] < e["b"]],
+            "pins": pins, "route": route,
+            "you": {"x": round(geo.x, 1), "y": round(geo.y, 1), "heading": geo.heading if geo.heading_known else None,
+                    "quality": geo.quality, "has_position": geo.lat is not None}}
+
+
+@app.post("/world/snapshot")
+def world_snapshot():
+    """Take a snapshot right here, right now (dashboard button / voice 'snapshot')."""
+    if last_dm is None:
+        raise HTTPException(409, "no depth yet")
+    if geo.lat is None or not geo.heading_known:
+        raise HTTPException(409, "need a position and a heading first")
+    if geo.current_node is None:
+        geo.mark_place(None)
+    place = {"events": []}
+    _maybe_stamp(place, time.time(), force=True)
+    return {"ok": True, "node_id": geo.current_node, "stamps": len(world.stamps)}
+
+
+@app.post("/world/clear")
+def world_clear():
+    world.clear()
+    return {"ok": True}
 
 
 @app.get("/cloud.bin")
@@ -994,6 +1060,7 @@ def clear_map():
     """Forget all places and the walked map (keeps people and their photos)."""
     db.clear_map()
     geo.__init__(db)
+    world.clear()
     last_sighting_log.clear()
     return {"ok": True}
 
@@ -1578,6 +1645,12 @@ async def command(request: Request):
     if text in ("stop search", "end search", "cancel search"):
         end_search()
         return {"ok": True, "say": "Search ended"}
+    if text in ("snapshot", "take a snapshot", "capture here", "3d snapshot"):
+        try:
+            r = world_snapshot()
+            return {"ok": True, "say": f"Snapshot saved, {r['stamps']} places in 3D"}
+        except HTTPException as e:
+            return {"ok": False, "say": e.detail}
     if text in ("scan", "scan the room", "scan room", "scan the crowd", "look around", "who's here", "who is here"):
         # the server can't take the photo: the app sees action=scan, captures a photo, POSTs it to /scan
         return {"ok": True, "action": "scan", "say": "Scanning, hold still"}
@@ -1617,6 +1690,7 @@ def state():
         "dropped": dropped,
         "has_live": last_live is not None,
         "has_cloud": last_cloud is not None,
+        "world_stamps": len(world.stamps), "world_rev": world.rev,
         "depth": last_depth if depth is not None else None,
         "frame_size": faces.last_size,
         "timing": _timing(),
@@ -1668,6 +1742,7 @@ def reset():
     card_hold.update(card=None, ts=0.0)
     last_shown.update(card=None, ts=0.0)
     globals()["search"] = None
+    world.clear()
     faces.last_far = []
     recent_alerts.clear()
     reports.clear()

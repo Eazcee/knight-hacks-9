@@ -24,6 +24,8 @@ FACE_W_M = 0.15
 CLOUD_W = 72                  # point cloud columns (rows follow the frame's aspect)
 NEAR_M = 1.8                  # "obstacle" = most of the path band closer than this
 OBSTACLE_FRAMES = 3           # ...for this many frames in a row
+FLOOR_M = 2.0                 # with a level head the floor at the bottom-centre of the frame is ~2 m away (eye 1.6 m)
+FACE_SCALE_TTL = 10.0         # a face sets the scale; after this many seconds the floor keeps it
 MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
 
@@ -49,8 +51,10 @@ class DepthEngine:
         shp = inp.shape
         self.in_h = int(shp[2]) if isinstance(shp[2], int) else 256
         self.in_w = int(shp[3]) if isinstance(shp[3], int) else 256
-        self.scale = None             # meters * rel  (set by faces)
+        self.scale = None             # meters * rel  (set by faces, kept by the floor)
         self.scale_ts = 0.0
+        self.face_ts = 0.0
+        self.scale_src = None         # faces | floor
         self.near_streak = 0
         self.last = None              # last result dict
         self.ms = 0.0
@@ -88,7 +92,27 @@ class DepthEngine:
         if ks:
             k = float(np.median(ks))
             self.scale = k if self.scale is None else 0.7 * self.scale + 0.3 * k
-            self.scale_ts = time.time()
+            self.scale_ts = self.face_ts = time.time()
+            self.scale_src = "faces"
+        return self.scale
+
+    def calibrate_floor(self, rel):
+        """No face around: the floor keeps the scale. The net's output is only relative *per frame*,
+        so without this every frame would get a different idea of a meter; the bottom-centre of a
+        level frame is floor ~2 m away, which pins it well enough for snapshots and obstacles."""
+        ch, cw = rel.shape
+        patch = rel[int(ch * 0.9):, int(cw * 0.4):int(cw * 0.6)]
+        if patch.size == 0:
+            return self.scale
+        k = FLOOR_M * float(np.median(patch))
+        if self.scale is None:
+            self.scale = k
+        elif time.time() - self.face_ts > FACE_SCALE_TTL:
+            self.scale = 0.8 * self.scale + 0.2 * k
+        else:
+            return self.scale
+        self.scale_ts = time.time()
+        self.scale_src = "floor"
         return self.scale
 
     def _rel_in_box(self, rel, box, W, H):
@@ -137,7 +161,11 @@ class DepthEngine:
                 self.near_streak = 0
                 return {"near": 0.0, "blocked": False, "people": True}
         near = float((band < NEAR_M).mean())
-        self.near_streak = self.near_streak + 1 if near >= 0.6 else 0
+        # the scale is a guess at best: only believe "near" when the band is clearly closer than the
+        # top of the view (ceiling / sky / the far end of the hall), not when the whole frame reads near
+        top = depth_m[: max(1, int(ch * 0.2)), x0:x1]
+        standout = float(np.median(band)) < 0.6 * float(np.median(top))
+        self.near_streak = self.near_streak + 1 if (near >= 0.6 and standout) else 0
         return {"near": round(near, 2), "blocked": self.near_streak >= OBSTACLE_FRAMES, "people": False}
 
     # ---- point cloud ---------------------------------------------------

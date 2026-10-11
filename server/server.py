@@ -22,7 +22,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from db import DB
+from database_config import open_database
 import faces as faces_mod
 from faces import FaceEngine
 from geo import GeoMap, haversine_m
@@ -45,7 +45,8 @@ FACE_W_M = 0.15              # average face width, for distance from face size
 os.makedirs(DATA, exist_ok=True)
 for d in DIRS.values():
     os.makedirs(d, exist_ok=True)
-db = DB(os.path.join(DATA, "beacon.db"))
+db = open_database(os.path.join(DATA, "beacon.db"))
+print(f"Beacon database: {db.backend}")
 db.prune_anonymous(RETENTION_H * 3600)
 faces = FaceEngine(db, crops_dir=DIRS["crops"], auto_enroll=AUTO_ENROLL)
 geo = GeoMap(db)

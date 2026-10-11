@@ -1,4 +1,4 @@
-"""SQLite storage for people, their training photos, sightings, places and edges.
+"""Shared database operations with a local SQLite implementation.
 
 Everything the glasses learn lives here. Embeddings ("face fingerprints") are
 stored as raw float32 blobs, each with the photo it came from, so you can see
@@ -7,8 +7,19 @@ and curate every person's training set.
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
+from functools import wraps
 
 import numpy as np
+
+
+def atomic(method):
+    """Keep multi-statement mutations together, including nested operations."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.transaction():
+            return method(self, *args, **kwargs)
+    return wrapped
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS people (
@@ -71,13 +82,16 @@ MIGRATIONS = {
 
 
 class DB:
+    backend = "sqlite"
+
     def __init__(self, path="data/beacon.db"):
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         # WAL + normal sync: commits stop waiting on the disk every time (big win on Windows)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self._transaction_depth = 0
         with self.lock:
             self.conn.executescript(SCHEMA)
             for table, cols in MIGRATIONS.items():
@@ -88,23 +102,53 @@ class DB:
             self.conn.commit()
 
     # ---- helpers -------------------------------------------------------
+    @contextmanager
+    def transaction(self):
+        with self.lock:
+            outer = self._transaction_depth == 0
+            if outer:
+                self.conn.execute("BEGIN")
+            self._transaction_depth += 1
+            try:
+                yield
+                if outer:
+                    self.conn.commit()
+            except BaseException:
+                if outer:
+                    self.conn.rollback()
+                raise
+            finally:
+                self._transaction_depth -= 1
+
+    def close(self):
+        with self.lock:
+            self.conn.close()
+
     def _run(self, sql, args=(), fetch=None):
         with self.lock:
-            cur = self.conn.execute(sql, args)
-            self.conn.commit()
-            if fetch == "one":
-                r = cur.fetchone()
-                return dict(r) if r else None
-            if fetch == "all":
-                return [dict(r) for r in cur.fetchall()]
-            return cur.lastrowid
+            try:
+                cur = self.conn.execute(sql, args)
+                if not self._transaction_depth:
+                    self.conn.commit()
+                if fetch == "one":
+                    r = cur.fetchone()
+                    return dict(r) if r else None
+                if fetch == "all":
+                    return [dict(r) for r in cur.fetchall()]
+                return cur.lastrowid
+            except BaseException:
+                if not self._transaction_depth:
+                    self.conn.rollback()
+                raise
 
     # ---- people --------------------------------------------------------
     def add_person(self, pid, name=None, notes="", crop=None, is_watch=0, watch_label=""):
         now = time.time()
         self._run(
-            "INSERT OR REPLACE INTO people (id,name,notes,is_watch,watch_label,crop,created_at,last_seen)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO people (id,name,notes,is_watch,watch_label,crop,created_at,last_seen)"
+            " VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET"
+            " name=excluded.name, notes=excluded.notes, is_watch=excluded.is_watch,"
+            " watch_label=excluded.watch_label, crop=excluded.crop, last_seen=excluded.last_seen",
             (pid, name, notes, is_watch, watch_label, crop, now, now),
         )
 
@@ -130,7 +174,8 @@ class DB:
         self._run(f"UPDATE people SET {cols} WHERE id=?", (*fields.values(), pid))
 
     def touch_person(self, pid, ts):
-        self._run("UPDATE people SET last_seen=MAX(COALESCE(last_seen,0), ?) WHERE id=?", (ts, pid))
+        self._run("UPDATE people SET last_seen=CASE WHEN COALESCE(last_seen,0) < ?"
+                  " THEN ? ELSE last_seen END WHERE id=?", (ts, ts, pid))
 
     def find_person_by_name(self, name):
         return self._run("SELECT * FROM people WHERE lower(name)=lower(?)", (name,), fetch="one")
@@ -144,6 +189,7 @@ class DB:
                 "emb": self._run("SELECT rowid AS rid, * FROM embeddings WHERE person_id=?", (pid,), fetch="all"),
                 "sig": self._run("SELECT * FROM sightings WHERE person_id=?", (pid,), fetch="all")}
 
+    @atomic
     def restore_person(self, snap):
         p = snap["person"]
         if self.person(p["id"]):
@@ -160,11 +206,13 @@ class DB:
             self._run(f"INSERT INTO sightings ({','.join(c3)}) VALUES ({','.join('?' * len(c3))})", tuple(r[c] for c in c3))
         return True
 
+    @atomic
     def delete_person(self, pid):
         self._run("DELETE FROM embeddings WHERE person_id=?", (pid,))
         self._run("DELETE FROM sightings WHERE person_id=?", (pid,))
         self._run("DELETE FROM people WHERE id=?", (pid,))
 
+    @atomic
     def merge_people(self, src, dst):
         """Fold person `src` into `dst`: all training photos and sightings move over.
         Returns a snapshot that undo_merge() can restore, or False."""
@@ -188,6 +236,7 @@ class DB:
         self._run("DELETE FROM people WHERE id=?", (src,))
         return snap
 
+    @atomic
     def undo_merge(self, snap):
         """Put a merged person back exactly as they were."""
         a, b = snap["src"], snap["dst"]
@@ -218,10 +267,34 @@ class DB:
 
     # ---- training photos (embeddings) ----------------------------------
     def add_embedding(self, pid, vec, crop=None, quality=0.0, source="auto"):
+        vec = self.validate_embedding(vec)
         return self._run(
             "INSERT INTO embeddings (person_id, vec, created_at, crop, quality, source) VALUES (?,?,?,?,?,?)",
             (pid, np.asarray(vec, dtype=np.float32).tobytes(), time.time(), crop, quality, source),
         )
+
+    @staticmethod
+    def validate_embedding(vec):
+        vec = np.asarray(vec, dtype=np.float32)
+        if vec.shape != (512,) or not np.isfinite(vec).all() or not np.linalg.norm(vec):
+            raise ValueError("An embedding must contain 512 finite values and have nonzero length")
+        return vec
+
+    def nearest_people(self, vec, limit=2):
+        """Exact cosine search, returning one best similarity per person."""
+        vec = self.validate_embedding(vec)
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        ids, matrix, _ = self.embeddings()
+        if not ids:
+            return []
+        norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(vec)
+        sims = np.divide(matrix @ vec, norms, out=np.zeros(len(ids)), where=norms != 0)
+        best = {}
+        for pid, sim in zip(ids, sims):
+            best[pid] = max(best.get(pid, -float("inf")), float(sim))
+        return [{"person_id": pid, "sim": sim} for pid, sim in
+                sorted(best.items(), key=lambda item: (-item[1], item[0]))[:limit]]
 
     def embeddings(self):
         """Returns (person_ids, matrix, embedding_ids) for every stored embedding."""
@@ -281,14 +354,18 @@ class DB:
             "SELECT c.name, c.sort, (SELECT COUNT(*) FROM people p WHERE p.category=c.name) AS count"
             " FROM categories c ORDER BY c.sort, c.created_at", fetch="all")
 
+    @atomic
     def add_category(self, name):
         n = self._run("SELECT COUNT(*) AS n FROM categories", fetch="one")["n"]
-        self._run("INSERT OR IGNORE INTO categories (name, sort, created_at) VALUES (?,?,?)", (name, n, time.time()))
+        self._run("INSERT INTO categories (name, sort, created_at) VALUES (?,?,?)"
+                  " ON CONFLICT (name) DO NOTHING", (name, n, time.time()))
 
+    @atomic
     def rename_category(self, old, new):
         self._run("UPDATE categories SET name=? WHERE name=?", (new, old))
         self._run("UPDATE people SET category=? WHERE category=?", (new, old))
 
+    @atomic
     def delete_category(self, name):
         self._run("DELETE FROM categories WHERE name=?", (name,))
         self._run("UPDATE people SET category=NULL WHERE category=?", (name,))
@@ -374,6 +451,7 @@ class DB:
     def bump_visits(self, nid):
         self._run("UPDATE nodes SET visits=visits+1 WHERE id=?", (nid,))
 
+    @atomic
     def add_edge(self, a, b, dist, crowd=0.0):
         if a == b:
             return
@@ -390,6 +468,7 @@ class DB:
                     (u, v, dist, crowd),
                 )
 
+    @atomic
     def set_edge(self, a, b, **fields):
         cols = ", ".join(f"{k}=?" for k in fields)
         for (u, v) in ((a, b), (b, a)):
@@ -398,6 +477,7 @@ class DB:
     def edges(self):
         return self._run("SELECT * FROM edges", fetch="all")
 
+    @atomic
     def clear_map(self):
         """Forget all places (keeps people). Sightings keep their time, lose their place."""
         with self.lock:
@@ -405,11 +485,10 @@ class DB:
             self.conn.execute("DELETE FROM edges")
             self.conn.execute("UPDATE sightings SET node_id=NULL")
             self.conn.execute("DELETE FROM sqlite_sequence WHERE name='nodes'")
-            self.conn.commit()
 
+    @atomic
     def wipe(self):
         with self.lock:
             for t in ("people", "embeddings", "sightings", "nodes", "edges", "categories"):
                 self.conn.execute(f"DELETE FROM {t}")
             self.conn.execute("DELETE FROM sqlite_sequence")  # place ids restart at 1
-            self.conn.commit()

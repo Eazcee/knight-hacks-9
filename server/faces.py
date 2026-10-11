@@ -117,6 +117,8 @@ class FaceEngine:
         os.makedirs(crops_dir, exist_ok=True)
         self.auto_enroll = auto_enroll
         self.lock = threading.Lock()
+        if hasattr(db, "ensure_model"):
+            db.ensure_model(MODEL)
         # embeddings from different models can't be compared: don't mix them in one database
         mpath = os.path.join(os.path.dirname(crops_dir) or ".", "model.txt")
         saved = open(mpath).read().strip() if os.path.exists(mpath) else None
@@ -231,7 +233,11 @@ class FaceEngine:
         f = self.largest_face(img_bgr)
         if not f:
             return None
-        pid, sim = self.match(f["emb"])
+        # Uploaded enrollment/watch photos use database cosine search (pgvector on
+        # Neon). Live frames retain the fast local matrix; both use the same vectors.
+        candidates = self.db.nearest_people(f["emb"], limit=1)
+        sim = candidates[0]["sim"] if candidates else 0.0
+        pid = candidates[0]["person_id"] if candidates and sim >= MATCH_THRESHOLD else None
         matched_existing = pid is not None
         if not matched_existing:
             pid = "p_" + uuid.uuid4().hex[:6]

@@ -127,6 +127,33 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .lb .nav.l{left:16px}.lb .nav.r{right:16px}
 .lb .x{position:fixed;top:16px;right:16px}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#0b2a1b;border:1px solid #1f5137;color:#c9f5dd;padding:10px 16px;border-radius:10px;display:none;z-index:60}
+.cat{margin-top:14px;border:1px dashed transparent;border-radius:12px;padding:6px;transition:border-color .1s,background .1s}
+.cat.over{border-color:var(--accent);background:rgba(76,195,138,.06)}
+.cat-h{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-weight:600}
+.cat-h .n{color:var(--muted);font-weight:400;font-size:12px}
+.cat-h button{padding:2px 8px;font-size:12px}
+.cat .people{min-height:60px}
+.card.dragging{opacity:.4}
+.card.over{outline:3px solid var(--warn);outline-offset:2px}
+.card .nm{cursor:text;border-radius:4px;padding:0 2px;margin:0 -2px}
+.card .nm:hover{background:#2b3240}
+.card .nm input{padding:2px 4px;font-weight:600;font-size:14px}
+.card .ph{cursor:pointer}
+.grp{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px;background:var(--panel2)}
+.grp-h{display:flex;align-items:baseline;gap:6px;margin-bottom:6px}
+.grp-h b{cursor:pointer}
+.grp-faces{display:flex;flex-wrap:wrap;gap:6px}
+.grp-faces .f{width:44px;text-align:center;cursor:pointer}
+.grp-faces img{width:40px;height:40px;border-radius:50%;object-fit:cover;border:3px solid #ef4444;background:#0b0d10;display:block;margin:0 auto}
+.grp-faces .f.met img{border-color:#4cc38a}
+.grp-faces small{display:block;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wl{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:8px;background:var(--panel2)}
+.wl img{width:52px;height:52px;border-radius:10px;object-fit:cover;background:#0b0d10}
+.wl.in_view{border-color:#ef4444;background:#2a1414;animation:wpulse 1.2s infinite}
+@keyframes wpulse{50%{box-shadow:0 0 0 4px rgba(239,68,68,.35)}}
+.hud{aspect-ratio:1/1;max-height:300px;display:flex;flex-direction:column;justify-content:center}
+.hud.stale{opacity:.45}
+.hud .l{font-size:17px;line-height:1.35;margin-top:4px}
 @media (max-width:1100px){main{grid-template-columns:1fr}.top{grid-template-columns:1fr}}
 </style>
 </head>
@@ -138,7 +165,6 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
   <button onclick="openTrainNew()">+ Train new person</button>
   <button onclick="$('scanFile').click()" title="Run a big photo through Scan (what a 12 MP glasses photo does)">Scan a photo</button>
   <input type="file" id="scanFile" accept="image/*" style="display:none" onchange="scanPhoto(this)">
-  <button onclick="openAlert()" style="border-color:#6b2a2a">Load alert photo</button>
   <button class="danger" onclick="deleteAll()">Delete all</button>
 </header>
 
@@ -152,21 +178,22 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
       </div>
       <div class="col">
         <div class="panel">
-          <h2>On the glasses</h2>
+          <h2>On the glasses <span class="right"><small id="hudAgo" style="text-transform:none;letter-spacing:0"></small></span></h2>
           <div class="hud" id="hud"></div>
         </div>
         <div class="panel">
-          <h2>Alerts <span class="right"><button onclick="api('/report',{method:'POST'}).then(r=>toast(r.say||'Reported'))">Report latest</button></span></h2>
-          <div id="alerts"><small>No alerts. Load an alert photo to start watching for someone.</small></div>
+          <h2>Watchlist <span class="right"><button onclick="openAlert()" style="border-color:#6b2a2a">+ Alert photo</button></span></h2>
+          <div id="alerts"></div>
         </div>
       </div>
     </div>
 
     <div class="panel">
       <h2>People <span class="muted" id="peopleCount"></span>
-        <span class="right"><small>Click a person to see and fix their photos</small></span></h2>
+        <span class="right"><button onclick="newCategory()">+ Category</button></span></h2>
+      <small class="muted">Click a name to rename. Drag a person onto a category to file them, or onto another person if they're the same person (their photos merge and recognition learns from both). Click a photo for details.</small>
       <div id="suggestions"></div>
-      <div class="people" id="people" style="margin-top:10px"></div>
+      <div id="people" style="margin-top:6px"></div>
     </div>
 
     <div class="panel">
@@ -193,7 +220,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 
   <div class="col">
     <div class="panel">
-      <h2>Timeline</h2>
+      <h2>Met nearby <span class="right"><small style="text-transform:none;letter-spacing:0">within <input type="number" id="radius" min="5" max="500" step="5" style="width:56px;padding:2px 5px" onchange="api('/settings',{method:'POST',json:{group_radius_m:+this.value||30}}).then(tick)"> m</small></span></h2>
       <div class="timeline" id="timeline"><small>Nothing yet.</small></div>
     </div>
   </div>
@@ -252,14 +279,29 @@ function renderLive(){
   $('liveInfo').textContent=lp.join(' · ');
 }
 function renderHud(){
-  const d=S.display;const h=$('hud');h.className='hud'+(d.level==='alert'?' alert':'');
-  h.innerHTML=`<div class="t">${esc(d.title||'—')}</div>${(d.lines||[]).map(l=>`<div>${esc(l)}</div>`).join('')||'<div class="muted">nothing to show</div>'}`;
+  // what the glasses show right now; when they're blank, the last card (faded) so you can see what was shown
+  let d=S.display,stale=false;
+  if(d.level==='quiet'&&S.last_shown&&S.last_shown.card){d=S.last_shown.card;stale=true}
+  const h=$('hud');h.className='hud'+(d.level==='alert'?' alert':'')+(stale?' stale':'');
+  $('hudAgo').textContent=stale?'blank now · last card '+(S.last_shown.ago||''):(d.level==='quiet'?'blank':'showing now');
+  h.innerHTML=d.level==='quiet'&&!stale?'<div class="muted" style="text-align:center">Glasses display is blank.<br><small>Cards appear when someone is in view, during navigation or alerts.</small></div>'
+    :`<div class="t">${esc(d.title||'')}</div>${(d.lines||[]).map(l=>`<div class="l">${esc(l)}</div>`).join('')}`;
 }
 function renderAlerts(){
-  if(!S.alerts.length){return}
-  $('alerts').innerHTML=S.alerts.slice(0,4).map(a=>`<div class="alert-row"><div style="flex:1"><b>${esc(a.watch_label||'ALERT')}</b><br>
-  <small>${esc(a.place||'unknown place')} · ${esc(a.ago)} · match ${Math.round(a.sim*100)}%</small></div>
-  <button onclick="openPerson('${a.person_id}')">Open</button></div>`).join('');
+  const W=S.watchlist||[];
+  const key=JSON.stringify(W.map(w=>[w.id,w.status,w.last_seen_ago,w.last_place,w.dir,w.photo]));
+  if(key===renderAlerts._k)return;renderAlerts._k=key;
+  $('alerts').innerHTML=W.length?W.map(w=>{
+    const st=w.status==='in_view'?`<b style="color:#ff6b6b">IN VIEW NOW · ${esc(w.dir||'')}</b>`:
+      w.status==='possible'?`<b style="color:#f5a524">possible match · ${esc(w.dir||'')} · get closer</b>`:
+      w.status==='seen'?`last seen ${esc(w.last_seen_ago||'')}${w.last_place?' · '+esc(w.last_place):''}`:'not seen yet · watching';
+    return `<div class="wl ${w.status}"><img src="${w.photo||''}" onclick="openPerson('${w.id}')" style="cursor:pointer">
+      <div style="flex:1;min-width:0"><b>${esc(w.watch_label||w.name||'Alert')}</b><br><small>${st}</small></div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+      ${w.status!=='not_seen'?`<button onclick="navTo('${w.id}')">Navigate</button>`:''}
+      ${w.status==='in_view'?`<button class="primary" onclick="api('/report',{method:'POST'}).then(r=>toast(r.say||'Reported',5000))">Report</button>`:''}
+      <button class="ghost" onclick="if(confirm('Stop watching for them?'))api('/watch/${w.id}',{method:'DELETE'}).then(tick)">Clear</button></div></div>`}).join('')
+   :'<small>Nobody on the watchlist. Add an alert photo (e.g. a missing person): Beacon checks whether you already passed them, where, and alerts the glasses the moment they appear.</small>';
 }
 function renderTrain(){
   const t=S.train;const b=$('trainBanner');
@@ -268,24 +310,79 @@ function renderTrain(){
   <div class="progress"><i style="width:${Math.min(100,t.added/t.goal*100)}%"></i></div><span>${t.added}/${t.goal} · ${t.seconds_left}s</span>
   <button onclick="api('/train/stop',{method:'POST'})">Stop</button></div>`;
 }
+let dragging=null;
+function personCard(p,inView){
+  const sub=[p.met_place?'met at '+esc(p.met_place):'',p.first_seen_ago?esc(p.first_seen_ago):''].filter(Boolean).join(' · ')||'—';
+  return `<div class="card" draggable="true" data-pid="${p.id}">
+    <div class="ph" onclick="openPerson('${p.id}')" style="background-image:url('${p.photo||''}');box-shadow:inset 0 0 0 4px ${p.met?'#4cc38a':'#ef4444'}">${p.is_watch?'<span class="badge watch badge">ALERT</span>':''}${p.met?'<span class="badge tk">talked</span>':''}${inView.has(p.id)?'<span class="live-dot" title="in view now"></span>':''}</div>
+    <div class="meta"><div class="nm" onclick="editName(event,'${p.id}')" title="Click to rename">${esc(p.name||'Unknown')}</div>
+    ${p.notes?`<div class="sub" title="${esc(p.notes)}">${esc(p.notes)}</div>`:''}
+    <div class="sub" title="Where and when you first met">${sub}</div>
+    <div class="sub" title="Photos recognition compares new faces against (more angles = better). Seen = times logged.">${p.n_train||0} photos · seen ${p.n_seen||0}× · ${esc(p.last_seen_ago||'')}</div></div></div>`;
+}
 function renderPeople(){
+  if(dragging||document.querySelector('.card .nm input'))return;   // don't redraw under the mouse
   const inView=new Set(S.last_people.map(p=>p.person_id));
-  const key=JSON.stringify(S.people.map(p=>[p.id,p.name,p.photo,p.n_train,p.n_seen,p.last_place,p.is_watch,inView.has(p.id),p.last_seen_ago,p.met]));
+  const cats=S.categories||[];
+  const key=JSON.stringify([cats,S.people.map(p=>[p.id,p.name,p.notes,p.photo,p.n_train,p.n_seen,p.met_place,p.first_seen_ago,p.is_watch,inView.has(p.id),p.last_seen_ago,p.met,p.category])]);
   if(key===lastPeopleKey)return;lastPeopleKey=key;
   $('peopleCount').textContent=S.people.length?`(${S.people.length})`:'';
-  $('people').innerHTML=S.people.map(p=>`<div class="card" onclick="openPerson('${p.id}')">
-    <div class="ph" style="background-image:url('${p.photo||''}');box-shadow:inset 0 0 0 4px ${p.met?'#4cc38a':'#ef4444'}">${p.is_watch?'<span class="badge watch badge">ALERT</span>':''}${p.met?'<span class="badge tk">talked</span>':''}${inView.has(p.id)?'<span class="live-dot" title="in view now"></span>':''}</div>
-    <div class="meta"><div class="nm">${esc(p.name||'Unknown')}</div>
-    <div class="sub">${p.n_train||0} training · seen ${p.n_seen||0}×</div>
-    <div class="sub">${esc(p.last_place||'—')} · ${esc(p.last_seen_ago||'')}</div></div></div>`).join('')||'<small>No one yet. Look at someone with the glasses on.</small>';
+  if(!S.people.length&&!cats.length){$('people').innerHTML='<small>No one yet. Look at someone with the glasses on.</small>';return}
+  const sec=(name,list,isCat)=>`<div class="cat" data-cat="${isCat?esc(name):''}">
+    <div class="cat-h">${isCat?esc(name):'Unsorted'} <span class="n">${list.length}</span>
+      ${isCat?`<button class="ghost" onclick="renameCategory('${esc(name)}')">Rename</button><button class="ghost" onclick="deleteCategory('${esc(name)}')">✕</button>`:''}</div>
+    <div class="people">${list.map(p=>personCard(p,inView)).join('')||'<small class="muted">Drag people here</small>'}</div></div>`;
+  $('people').innerHTML=cats.map(c=>sec(c.name,S.people.filter(p=>p.category===c.name),true)).join('')+
+    sec('',S.people.filter(p=>!p.category||!cats.some(c=>c.name===p.category)),false);
+  wireDnD();
 }
+function wireDnD(){
+  document.querySelectorAll('#people .card').forEach(c=>{
+    c.addEventListener('dragstart',e=>{dragging=c.dataset.pid;c.classList.add('dragging');e.dataTransfer.setData('text/plain',c.dataset.pid);e.dataTransfer.effectAllowed='move'});
+    c.addEventListener('dragend',()=>{dragging=null;c.classList.remove('dragging');document.querySelectorAll('.over').forEach(x=>x.classList.remove('over'))});
+    c.addEventListener('dragover',e=>{if(dragging&&dragging!==c.dataset.pid){e.preventDefault();e.stopPropagation();c.classList.add('over')}});
+    c.addEventListener('dragleave',()=>c.classList.remove('over'));
+    c.addEventListener('drop',async e=>{e.preventDefault();e.stopPropagation();c.classList.remove('over');
+      const src=e.dataTransfer.getData('text/plain'),dst=c.dataset.pid;if(!src||src===dst)return;
+      const a=S.people.find(p=>p.id===src),b=S.people.find(p=>p.id===dst);
+      if(!confirm(`Same person? "${a&&a.name||'Unknown'}" will be merged into "${b&&b.name||'Unknown'}": photos, sightings and notes move over and recognition learns from both.`))return;
+      await merge(src,dst)});
+  });
+  document.querySelectorAll('#people .cat').forEach(sec=>{
+    sec.addEventListener('dragover',e=>{if(dragging){e.preventDefault();sec.classList.add('over')}});
+    sec.addEventListener('dragleave',e=>{if(!sec.contains(e.relatedTarget))sec.classList.remove('over')});
+    sec.addEventListener('drop',async e=>{e.preventDefault();sec.classList.remove('over');const pid=e.dataTransfer.getData('text/plain');if(!pid)return;
+      await api(`/people/${pid}/category`,{method:'POST',json:{category:sec.dataset.cat||null}});lastPeopleKey='';tick()});
+  });
+}
+function editName(e,pid){
+  e.stopPropagation();const el=e.currentTarget;if(el.querySelector('input'))return;
+  const p=S.people.find(x=>x.id===pid);const old=p&&p.name||'';
+  el.innerHTML=`<input value="${esc(old)}" placeholder="Name">`;const inp=el.querySelector('input');inp.focus();inp.select();
+  let done=false;const finish=async save=>{if(done)return;done=true;const v=inp.value.trim();
+    el.textContent=(save?v:old)||'Unknown';
+    if(save&&v!==old){try{await api(`/people/${pid}`,{method:'POST',json:{name:v}});toast(v?'Named '+v:'Name cleared')}catch(e){}}
+    lastPeopleKey='';tick()};
+  inp.addEventListener('keydown',ev=>{if(ev.key==='Enter')finish(true);if(ev.key==='Escape')finish(false)});
+  inp.addEventListener('blur',()=>finish(true));
+  inp.addEventListener('click',ev=>ev.stopPropagation());
+}
+async function newCategory(){const n=prompt('New category (e.g. Judges, Team, Mentors):');if(!n||!n.trim())return;await api('/categories',{method:'POST',json:{name:n.trim()}});lastPeopleKey='';tick()}
+async function renameCategory(old){const n=prompt('Rename category:',old);if(!n||!n.trim()||n.trim()===old)return;await api('/categories/rename',{method:'POST',json:{old,new:n.trim()}});lastPeopleKey='';tick()}
+async function deleteCategory(name){if(!confirm(`Delete category "${name}"? Its people move to Unsorted.`))return;await api('/categories/'+encodeURIComponent(name),{method:'DELETE'});lastPeopleKey='';tick()}
 function renderTimeline(){
-  const key=JSON.stringify(S.sightings.map(s=>[s.id,s.person_name]));
-  if(key===lastTlKey){document.querySelectorAll('[data-ago]').forEach(()=>{});return}lastTlKey=key;
-  window._tl=S.sightings;
-  $('timeline').innerHTML=S.sightings.map((s,i)=>`<div class="tl" onclick="lbOpen(window._tl,${i})"><img src="${s.photo||''}" alt="">
-   <div style="min-width:0"><div><b>${esc(s.person_name||s.person_id)}</b></div><small>${esc(s.place||'no place')} · ${esc(s.ago)} · ${Math.round(s.sim*100)}%</small></div></div>`).join('')||'<small>Nothing yet.</small>';
+  const G=S.groups||[];
+  if(document.activeElement!==$('radius'))$('radius').value=S.settings.group_radius_m||30;
+  const key=JSON.stringify(G.map(g=>[g.id,g.name,g.ago,g.people.map(p=>[p.id,p.name,p.photo,p.met])]));
+  if(key===lastTlKey)return;lastTlKey=key;
+  $('timeline').innerHTML=G.length?G.map(g=>`<div class="grp">
+    <div class="grp-h"><b ${g.kind==='place'?`onclick="nameGroup(${g.lat},${g.lng},'${esc(g.named?g.name:'')}')" title="Click to name this place"`:''}>${g.kind==='place'?'📍 ':'🕒 '}${esc(g.name)}</b>
+      <small class="muted">${g.people.length} · ${esc(g.ago||'')}</small>
+      ${g.kind==='place'?`<span class="spacer"></span><button class="ghost" style="padding:1px 6px;font-size:11px" onclick="navToPoint(${g.lat},${g.lng})">Go</button>`:''}</div>
+    <div class="grp-faces">${g.people.map(p=>`<div class="f ${p.met?'met':''}" onclick="openPerson('${p.id}')" title="${esc(p.name||'Unknown')}${p.met?' · talked':''}"><img src="${p.photo||''}"><small>${esc(p.name||'?')}</small></div>`).join('')}</div>
+  </div>`).join(''):'<small>People you meet show up here, grouped by where you met them (or by time when there is no GPS).</small>';
 }
+async function nameGroup(lat,lng,cur){const n=prompt('Name this place:',cur);if(!n||!n.trim())return;await api('/groups/name',{method:'POST',json:{lat,lng,name:n.trim()}});lastTlKey='';tick()}
 async function loadSuggestions(){
   let L=[];try{L=await api('/suggestions')}catch(e){return}
   $('suggestions').innerHTML=L.length?`<div class="banner" style="flex-direction:column;align-items:stretch"><b>These might be the same person</b>

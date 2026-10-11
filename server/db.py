@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS sightings (
     sim         REAL,
     crop        TEXT
 );
+CREATE TABLE IF NOT EXISTS categories (
+    name        TEXT PRIMARY KEY,
+    sort        INTEGER DEFAULT 0,
+    created_at  REAL
+);
 CREATE TABLE IF NOT EXISTS nodes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT,
@@ -61,7 +66,7 @@ MIGRATIONS = {
     "embeddings": {"crop": "TEXT", "quality": "REAL DEFAULT 0", "source": "TEXT DEFAULT 'auto'"},
     "sightings": {"frame": "TEXT", "box": "TEXT", "quality": "REAL DEFAULT 0", "lat": "REAL", "lng": "REAL"},
     "nodes": {"lat": "REAL", "lng": "REAL"},
-    "people": {"met": "INTEGER DEFAULT 0", "met_at": "REAL", "met_lat": "REAL", "met_lng": "REAL"},
+    "people": {"met": "INTEGER DEFAULT 0", "met_at": "REAL", "met_lat": "REAL", "met_lng": "REAL", "category": "TEXT"},
 }
 
 
@@ -218,6 +223,32 @@ class DB:
             (pid, ts, node_id, x, y, sim, crop, frame, box, quality, lat, lng),
         )
 
+    def first_sighting(self, pid, located=False):
+        """Where/when you first saw someone (optionally the first one with a map position)."""
+        return self._run(
+            "SELECT s.*, n.name AS place FROM sightings s LEFT JOIN nodes n ON n.id=s.node_id"
+            " WHERE s.person_id=?" + (" AND s.lat IS NOT NULL" if located else "") + " ORDER BY s.ts ASC LIMIT 1",
+            (pid,), fetch="one",
+        )
+
+    # ---- categories ----------------------------------------------------
+    def categories(self):
+        return self._run(
+            "SELECT c.name, c.sort, (SELECT COUNT(*) FROM people p WHERE p.category=c.name) AS count"
+            " FROM categories c ORDER BY c.sort, c.created_at", fetch="all")
+
+    def add_category(self, name):
+        n = self._run("SELECT COUNT(*) AS n FROM categories", fetch="one")["n"]
+        self._run("INSERT OR IGNORE INTO categories (name, sort, created_at) VALUES (?,?,?)", (name, n, time.time()))
+
+    def rename_category(self, old, new):
+        self._run("UPDATE categories SET name=? WHERE name=?", (new, old))
+        self._run("UPDATE people SET category=? WHERE category=?", (new, old))
+
+    def delete_category(self, name):
+        self._run("DELETE FROM categories WHERE name=?", (name,))
+        self._run("UPDATE people SET category=NULL WHERE category=?", (name,))
+
     def last_located_sighting(self, pid):
         """Most recent sighting with a map position."""
         return self._run(
@@ -334,7 +365,7 @@ class DB:
 
     def wipe(self):
         with self.lock:
-            for t in ("people", "embeddings", "sightings", "nodes", "edges"):
+            for t in ("people", "embeddings", "sightings", "nodes", "edges", "categories"):
                 self.conn.execute(f"DELETE FROM {t}")
             self.conn.execute("DELETE FROM sqlite_sequence")  # place ids restart at 1
             self.conn.commit()

@@ -110,7 +110,20 @@ pid0 = r["people"][0]["person_id"]
 c.post(f"/people/{pid0}", json={"name": "Maya", "append_note": "judge, AI track, likes Rust"})
 r = frame(group, 0, 24)
 check(any(p["person_id"] == pid0 and p["name"] == "Maya" for p in r["people"]), "second look: Maya recognized with her note")
-check(any("Maya" in l for l in r["display"]["lines"]), "glasses display shows Maya's card")
+d = r["display"]
+check(d["title"] == "Maya" and "likes Rust" in d["lines"][0] and d["lines"][1].startswith("met ") and "Coffee Station" in d["lines"][1],
+      f"glasses card: {d['title']} / {d['lines']}")
+check("other" in d["lines"][-1], "card says how many others are in view")
+r = c.post("/categories", json={"name": "Judges"}).json()
+c.post(f"/people/{pid0}/category", json={"category": "Judges"})
+r = frame(group, 0, 24)
+check(r["display"]["title"] == "Maya · Judges", f"category on the card: {r['display']['title']}")
+pp = [q for q in c.get("/people").json() if q["id"] == pid0][0]
+check(pp["category"] == "Judges" and pp["met_place"] == "Coffee Station" and pp["first_seen_ago"], f"person: met at {pp['met_place']}, {pp['first_seen_ago']}")
+cats = c.get("/categories").json()
+check(cats == [{"name": "Judges", "sort": 0, "count": 1}], f"categories: {cats}")
+c.post("/categories/rename", json={"old": "Judges", "new": "AI Judges"})
+check([q for q in c.get("/people").json() if q["id"] == pid0][0]["category"] == "AI Judges", "category renamed with its people")
 p = c.get("/people").json()
 me = [q for q in p if q["id"] == pid0][0]
 blat, blng = ll(0, 24)
@@ -132,6 +145,12 @@ r = walk(scene, 24, 24, 0, 0)
 m = c.get("/map").json()
 check(r["place"]["node_id"] == nA, f"back at A: snapped to place 1 ({len(m['nodes'])} places on the map)")
 check(len(m["trail"]) > 30 and m["position"]["lat"], "walked trail recorded")
+G = c.get("/groups").json()
+check(len(G) == 1 and G[0]["kind"] == "place" and G[0]["name"] == "Coffee Station" and len(G[0]["people"]) >= 4,
+      f"met nearby: {[(g['name'], len(g['people'])) for g in G]}")
+c.post("/groups/name", json={"lat": G[0]["lat"], "lng": G[0]["lng"], "name": "Coffee Bar"})
+check(c.get("/groups").json()[0]["name"] == "Coffee Bar", "renamed the group's place")
+c.post(f"/nodes/{nB}", json={"name": "Coffee Station"})
 
 # --- alert: a photo of Maya arrives. Seen before? Where? Route there.
 faces = server.faces.detect(group, min_px=20)

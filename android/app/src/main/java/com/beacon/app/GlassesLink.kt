@@ -119,6 +119,9 @@ class GlassesLink(
   private var reattachJob: Job? = null
   /** Consecutive sessions that ended before reaching STARTED, for the reconnect backoff. */
   private var failedAttempts = 0
+  // Frame-rate window for logSdkFrameRate (frame dispatcher only).
+  private var ptsWindowStart = -1L
+  private var ptsFrames = 0
   /** Set when the glasses refused the camera: the next Start goes straight to Meta AI. */
   private var askForCameraNextStart = false
 
@@ -390,8 +393,13 @@ class GlassesLink(
   }
 
   private fun addCamera(s: DeviceSession) {
-    s.addCamera(StreamConfiguration(videoQuality = VideoQuality.HIGH, frameRate = FRAME_RATE))
+    val config = StreamConfiguration(videoQuality = VideoQuality.HIGH, frameRate = FRAME_RATE)
+    s.addCamera(config)
         .onSuccess { added ->
+          // The SDK has no call for the negotiated rate; this is what was requested, and the
+          // frames' own presentation timestamps (logged every 10 s) show what the glasses deliver.
+          Log.i(TAG, "Camera added: requested ${config.videoQuality} @ ${config.frameRate} fps (compressVideo=${config.compressVideo})")
+          ptsWindowStart = -1L
           camera = added
           val stream = added.stream
           cameraJobs +=
@@ -405,6 +413,7 @@ class GlassesLink(
                     Log.i(TAG, "Stream size ${was ?: "-"} -> $size")
                     _status.update { it.copy(frameSize = size) }
                   }
+                  logSdkFrameRate(frame.presentationTimeUs, frame.width, frame.height)
                   uploader.offer(frame.buffer, frame.width, frame.height)
                 }
               }
@@ -487,6 +496,25 @@ class GlassesLink(
           val ready = _status.value.devices.values.any { it?.isReady == true }
           if (session === s && camera == null && _status.value.wantStreaming && ready) addCamera(s)
         }
+  }
+
+  /**
+   * Every 10 s: frames per second by the glasses' presentation timestamps, so the rate reflects
+   * when the glasses captured them, not when Bluetooth happened to deliver them to the phone.
+   */
+  private fun logSdkFrameRate(ptsUs: Long, width: Int, height: Int) {
+    if (ptsWindowStart < 0) {
+      ptsWindowStart = ptsUs
+      ptsFrames = 0
+      return
+    }
+    ptsFrames++
+    val spanUs = ptsUs - ptsWindowStart
+    if (spanUs < 10_000_000L) return
+    Log.i(TAG, "SDK frames: %d in %.1f s by presentation time = %.1f fps at %dx%d (requested %d)"
+        .format(ptsFrames, spanUs / 1e6, ptsFrames * 1e6 / spanUs, width, height, FRAME_RATE))
+    ptsWindowStart = ptsUs
+    ptsFrames = 0
   }
 
   private fun teardownSession() {

@@ -33,7 +33,9 @@ AUTO_ENROLL = os.environ.get("BEACON_AUTO_ENROLL", "1") == "1"
 SIGHTING_GAP_S = 15                                              # log a sighting at most this often per person+place
 DIRS = {k: os.path.join(DATA, k) for k in ("crops", "frames", "keyframes")}
 SETTINGS_PATH = os.path.join(DATA, "settings.json")
-DEFAULT_SETTINGS = {"convo_seconds": 30, "convo_enabled": True, "google_maps_key": ""}
+DEFAULT_SETTINGS = {"convo_seconds": 30, "convo_enabled": True, "google_maps_key": "", "group_radius_m": 30}
+CARD_HOLD_S = 4.0            # keep a person's card on the glasses this long after they leave view (no flicker)
+SESSION_GAP_S = 20 * 60      # without GPS, meetings more than 20 min apart are separate groups
 CONVO_GAP_S = 8              # a conversation survives looking away for this long
 CAM_HFOV_DEG = 75.0          # glasses camera horizontal field of view (approx.)
 FACE_W_M = 0.15              # average face width, for distance from face size
@@ -70,7 +72,9 @@ reports = []                # alerts the wearer chose to report (location sent)
 last_sighting_log = {}      # (pid, node_id) -> ts
 frame_count = 0
 dropped = 0
-hold = {"until": 0.0, "display": None}   # keep a scan result on the glasses for a few seconds
+hold = {"until": 0.0, "display": None}
+card_hold = {"card": None, "ts": 0.0}
+last_shown = {"card": None, "ts": 0.0}   # last non-empty card, for the dashboard's glasses preview   # keep a scan result on the glasses for a few seconds
 last_scan = None
 pipeline_lock = threading.Lock()   # one frame at a time; extra frames are dropped, not queued
 timing = deque(maxlen=60)          # (face seconds, rest seconds, wall time) of recent frames
@@ -106,7 +110,9 @@ def _ago(ts):
         return f"{int(s)}s ago"
     if s < 3600:
         return f"{int(s // 60)} min ago"
-    return f"{s / 3600:.1f} h ago"
+    if s < 48 * 3600:
+        return f"{s / 3600:.1f} h ago"
+    return f"{int(s // 86400)} days ago"
 
 
 def _url(path):
@@ -119,12 +125,75 @@ def _url(path):
     return f"/img/{parts[-2]}/{parts[-1]}"
 
 
-def _person_card(p):
-    """One glanceable line per person for the glasses."""
-    line = p["name"] or "Unknown"
-    if p["notes"]:
-        line += " · " + p["notes"][:60]
-    return line
+_nodes_cache = {"t": 0.0, "nodes": []}
+
+
+def _place_near(lat, lng, radius=40.0):
+    """Name of the closest place you named, within radius meters."""
+    if lat is None:
+        return None
+    best, bd = None, radius
+    if time.time() - _nodes_cache["t"] > 2:
+        _nodes_cache.update(t=time.time(), nodes=[n for n in db.nodes() if n.get("name") and n.get("lat") is not None])
+    for n in _nodes_cache["nodes"]:
+        if n.get("name") and n.get("lat") is not None:
+            d = haversine_m(lat, lng, n["lat"], n["lng"])
+            if d <= bd:
+                best, bd = n["name"], d
+    return best
+
+
+def _meet(pid, row=None):
+    """When and where you first met someone (where you talked, if you did)."""
+    row = row or db.person(pid) or {}
+    first = db.first_sighting(pid)
+    if row.get("met") and row.get("met_lat") is not None:
+        lat, lng, ts = row["met_lat"], row["met_lng"], row.get("met_at")
+    else:
+        loc = db.first_sighting(pid, located=True)
+        lat, lng = (loc["lat"], loc["lng"]) if loc else (None, None)
+        ts = first["ts"] if first else row.get("created_at")
+    place = (first or {}).get("place") or _place_near(lat, lng)
+    return {"ts": ts, "ago": _ago(ts), "place": place, "lat": lat, "lng": lng}
+
+
+def _people_card(people):
+    """What the glasses show when people are in view. One person: who they are, your note,
+    where you met. Several: their names. Strangers: whether you've seen them before."""
+    seen = sorted([p for p in people if p["confirmed"] and not p.get("possible")], key=lambda p: -p.get("px", 0))
+    if not seen:
+        return None
+    named = [p for p in seen if p["name"]]
+    others = len(seen) - 1
+    if len(named) == 1:
+        p = named[0]
+        row = db.person(p["person_id"]) or {}
+        m = _meet(p["person_id"], row)
+        title = p["name"] + (f" · {row['category']}" if row.get("category") else "")
+        lines = []
+        if p["notes"]:
+            lines.append(p["notes"][:70])
+        when = ("talked " if row.get("met") else "met ") + (m["ago"] or "")
+        lines.append(when + (f" · {m['place']}" if m["place"] else ""))
+        if p.get("tier") == "far":
+            lines.append(f"{p['dir']} · far away")
+        elif others:
+            lines.append(f"+{others} other{'s' if others > 1 else ''} in view")
+        return {"level": "info", "title": title, "lines": lines[:3]}
+    if named:
+        lines = [p["name"] + (f" · {p['notes'][:40]}" if p["notes"] else "") for p in named[:3]]
+        rest = len(seen) - min(3, len(named))
+        if rest and len(lines) < 3:
+            lines.append(f"+{rest} more")
+        return {"level": "info", "title": f"{len(seen)} people", "lines": lines}
+    p = seen[0]
+    m = _meet(p["person_id"])
+    fresh = p["new"] or not m["ts"] or time.time() - m["ts"] < 60
+    lines = [] if fresh else [f"first seen {m['ago']}" + (f" · {m['place']}" if m["place"] else "")]
+    lines.append("say 'this is …' to name them")
+    if others:
+        lines.append(f"{len(seen)} people in view")
+    return {"level": "info", "title": "New face" if fresh else "Seen before", "lines": lines}
 
 
 def _build_display(people, place, alerts, next_step, train):
@@ -150,22 +219,12 @@ def _build_display(people, place, alerts, next_step, train):
             return {"level": "info", "title": f"FOUND {arrived['name']}", "lines": ["they're right here"]}
         return {"level": "info", "title": f"Arrived · {arrived['name']}",
                 "lines": ["look around for them"] if arrived.get("person_id") else []}
-    lines = []
-    seen = [p for p in people if p["confirmed"] and not p.get("possible")]
-    known = sorted([p for p in seen if p["name"] or p["notes"]], key=lambda p: -p.get("px", 0))
-    for p in known[:3]:
-        lines.append(_person_card(p) + (f" · {p['dir']}" if p.get("tier") == "far" else ""))
-    strangers = len([p for p in seen if not (p["name"] or p["notes"])])
-    extra = len(known) - 3
-    if strangers > 0 or extra > 0:
-        new = len([p for p in seen if p["new"]])
-        parts = ([f"+{extra} more"] if extra > 0 else []) + ([f"{strangers} unknown"] if strangers else [])
-        lines.append(" · ".join(parts) + (f" · {new} new" if new else ""))
+    card = _people_card(people)
     if next_step:
-        return _nav_card(next_step, lines)
-    if lines:
-        return {"level": "info", "title": place or "", "lines": lines}
-    return {"level": "quiet", "title": place or "", "lines": []}
+        return _nav_card(next_step, [card["title"]] if card else [])
+    if card:
+        return card
+    return {"level": "quiet", "title": "", "lines": []}
 
 
 def _nav_card(n, lines):
@@ -218,6 +277,7 @@ def _person_public(p):
     """A person row for the UI, with image URLs and last place."""
     ls = db.last_sighting(p["id"])
     loc = ls if ls and ls.get("lat") is not None else db.last_located_sighting(p["id"])
+    meet = _meet(p["id"], p)
     best = p.get("best_crop") or p.get("crop")
     st = presence.get(p["id"])
     return {
@@ -226,7 +286,9 @@ def _person_public(p):
         "n_seen": p.get("n_seen"), "last_seen": p["last_seen"], "last_seen_ago": _ago(p["last_seen"]),
         "last_place": ls["place"] if ls else None,
         "lat": loc["lat"] if loc else None, "lng": loc["lng"] if loc else None,
-        "met": bool(p.get("met")), "met_at": p.get("met_at"),
+        "met": bool(p.get("met")), "met_at": p.get("met_at"), "category": p.get("category"),
+        "met_place": meet["place"], "first_seen_ago": meet["ago"], "first_seen": meet["ts"],
+        "meet_lat": meet["lat"], "meet_lng": meet["lng"],
         "in_view_s": round(st["last"] - st["start"]) if st and time.time() - st["last"] < CONVO_GAP_S else 0,
     }
 
@@ -340,8 +402,14 @@ def _pipeline(img, heading, steps, lat, lng, acc, ts):
     _draw_live(img, people, faces.last_far)
     last_people = people
     last_display = _build_display(people, place["place"], alerts, place["next"], faces.train_state())
+    if last_display["level"] == "info" and not place["next"] and people:
+        card_hold.update(card=last_display, ts=time.time())
+    elif last_display["level"] == "quiet" and card_hold["card"] and time.time() - card_hold["ts"] < CARD_HOLD_S:
+        last_display = card_hold["card"]   # they just looked away: don't blink the card off and on
     if not alerts and time.time() < hold["until"] and hold["display"]:
         last_display = hold["display"]   # a scan result stays up for a few seconds
+    if last_display["level"] != "quiet":
+        last_shown.update(card=last_display, ts=time.time())
     t2 = time.perf_counter()
     timing.append((t1 - t0, t2 - t1, time.time()))
     return {"people": people, "place": place, "alerts": alerts, "display": last_display,
@@ -683,17 +751,25 @@ def alerts():
 
 
 # ---------------------------------------------------------------- map & routing
-def _pins():
+def _pins(public=None):
     """Everyone with a map position: photo, red (seen) / green (talked) ring."""
     in_view = {p["person_id"] for p in last_people if p["confirmed"] and not p.get("possible")}
     out = []
-    for p in db.people():
-        pp = _person_public(p)
+    for pp in (public if public is not None else [_person_public(p) for p in db.people()]):
         if pp["lat"] is None:
             continue
-        pp["in_view"] = p["id"] in in_view
-        out.append(pp)
+        out.append({**pp, "in_view": pp["id"] in in_view})
     return out
+
+
+_sugg_cache = {"t": 0.0, "n": 0}
+
+
+def _n_suggestions():
+    """Merge suggestions are O(people^2): recompute at most every 10 s for the dashboard."""
+    if time.time() - _sugg_cache["t"] > 10:
+        _sugg_cache.update(t=time.time(), n=len(faces.suggest_merges()))
+    return _sugg_cache["n"]
 
 
 def _route_to_person(pid):
@@ -778,6 +854,136 @@ def cancel_route():
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- categories
+@app.get("/categories")
+def get_categories():
+    return db.categories()
+
+
+@app.post("/categories")
+async def add_category(request: Request):
+    name = ((await request.json()).get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    db.add_category(name)
+    return db.categories()
+
+
+@app.post("/categories/rename")
+async def rename_category(request: Request):
+    body = await request.json()
+    old, new = (body.get("old") or "").strip(), (body.get("new") or "").strip()
+    if not old or not new:
+        raise HTTPException(400, "old and new required")
+    db.rename_category(old, new)
+    return db.categories()
+
+
+@app.delete("/categories/{name}")
+def delete_category(name: str):
+    """Remove a category; its people go back to Unsorted."""
+    db.delete_category(name)
+    return db.categories()
+
+
+@app.post("/people/{pid}/category")
+async def set_category(pid: str, request: Request):
+    """Put someone in a category (drag and drop). {category: null} = Unsorted."""
+    if not db.person(pid):
+        raise HTTPException(404)
+    cat = ((await request.json()).get("category") or "").strip() or None
+    if cat:
+        db.add_category(cat)
+    db.update_person(pid, category=cat)
+    return {"ok": True, "category": cat}
+
+
+# ---------------------------------------------------------------- groups: who you met where
+def _groups(public=None):
+    """People grouped by where you met them (within group_radius_m), or, without GPS,
+    by when (meetings more than 20 minutes apart are separate groups)."""
+    R = float(settings.get("group_radius_m", 30))
+    public = public if public is not None else [_person_public(p) for p in db.people()]
+    located, timed = [], []
+    for pp in public:
+        item = {"id": pp["id"], "name": pp["name"], "photo": pp["photo"], "met": pp["met"],
+                "category": pp["category"], "is_watch": pp["is_watch"], "ts": pp["first_seen"] or 0}
+        if pp["meet_lat"] is not None:
+            located.append((pp["meet_lat"], pp["meet_lng"], item))
+        else:
+            timed.append(item)
+    groups = []
+    for lat, lng, item in sorted(located, key=lambda t: t[2]["ts"]):
+        g = next((g for g in groups if haversine_m(g["lat"], g["lng"], lat, lng) <= R), None)
+        if g is None:
+            g = {"kind": "place", "lat": lat, "lng": lng, "people": []}
+            groups.append(g)
+        g["people"].append(item)
+        n = len(g["people"])
+        g["lat"] += (lat - g["lat"]) / n
+        g["lng"] += (lng - g["lng"]) / n
+    k = 0
+    for g in groups:
+        k += 1
+        g["name"] = _place_near(g["lat"], g["lng"], R) or f"Area {k}"
+        g["named"] = not g["name"].startswith("Area ")
+    session = None
+    for item in sorted(timed, key=lambda i: i["ts"]):
+        if session is None or item["ts"] - session["end"] > SESSION_GAP_S:
+            session = {"kind": "time", "lat": None, "lng": None, "people": [], "start": item["ts"], "end": item["ts"], "named": False}
+            groups.append(session)
+        session["people"].append(item)
+        session["end"] = item["ts"]
+    for g in groups:
+        ts = [i["ts"] for i in g["people"]]
+        g["start"], g["end"] = min(ts), max(ts)
+        g["ago"] = _ago(g["end"])
+        if g["kind"] == "time":
+            a, b = time.localtime(g["start"]), time.localtime(g["end"])
+            g["name"] = time.strftime("%a %I:%M %p", a).replace(" 0", " ") + \
+                ("" if g["end"] - g["start"] < 120 else time.strftime(" – %I:%M %p", b).replace(" 0", " "))
+        g["people"].sort(key=lambda i: (not i["met"], -(i["ts"] or 0)))
+        g["id"] = f"{g['kind']}-{int(g['start'])}"
+    return sorted(groups, key=lambda g: -g["end"])
+
+
+@app.get("/groups")
+def get_groups():
+    return _groups()
+
+
+@app.post("/groups/name")
+async def name_group(request: Request):
+    """Name a place group: labels the nearest place on the map (or creates one there)."""
+    body = await request.json()
+    lat, lng, name = body.get("lat"), body.get("lng"), (body.get("name") or "").strip()
+    if lat is None or not name:
+        raise HTTPException(400, "lat, lng and name required")
+    nid, d = geo._nearest_node(lat, lng)
+    R = float(settings.get("group_radius_m", 30))
+    if nid is not None and d <= R:
+        geo.label(nid, name)
+    else:
+        x, y = geo._xy(lat, lng)
+        nid = db.add_node(name, x, y, lat=lat, lng=lng)
+    _nodes_cache["t"] = 0.0
+    return {"ok": True, "node_id": nid, "name": name}
+
+
+def _watchlist(public):
+    """Alert targets with what the glasses know: in view now / last seen where / never."""
+    in_view = {p["person_id"]: p for p in last_people if p["is_watch"]}
+    out = []
+    for pp in public:
+        if not pp["is_watch"]:
+            continue
+        v = in_view.get(pp["id"])
+        status = ("in_view" if v and v["confirmed"] and not v.get("possible") else
+                  "possible" if v else "seen" if pp["n_seen"] else "not_seen")
+        out.append({**pp, "status": status, "dir": v["dir"] if v else None})
+    return out
+
+
 # ---------------------------------------------------------------- settings / met
 @app.get("/settings")
 def get_settings():
@@ -791,6 +997,8 @@ async def set_settings(request: Request):
         settings["convo_seconds"] = max(3, int(body["convo_seconds"]))
     if "convo_enabled" in body:
         settings["convo_enabled"] = bool(body["convo_enabled"])
+    if "group_radius_m" in body:
+        settings["group_radius_m"] = max(5, min(500, float(body["group_radius_m"])))
     if "google_maps_key" in body:
         settings["google_maps_key"] = (body["google_maps_key"] or "").strip()
     with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -927,17 +1135,22 @@ async def command(request: Request):
 # ---------------------------------------------------------------- misc
 @app.get("/state")
 def state():
+    public = list_people()
     return {
-        "people": list_people()[:60],
+        "people": public,
+        "categories": db.categories(),
+        "groups": _groups(public),
+        "watchlist": _watchlist(public),
+        "last_shown": {**last_shown, "ago": _ago(last_shown["ts"]) if last_shown["ts"] else None},
         "sightings": [_sighting_public(s) for s in db.sightings(limit=30)],
-        "map": {**geo.state(), "pins": _pins()},
+        "map": {**geo.state(), "pins": _pins(public)},
         "settings": settings,
         "alerts": alerts()[:10],
         "display": last_display,
         "last_people": [{k: v for k, v in p.items() if k != "box"} for p in last_people],
         "reports": reports[-10:],
         "train": faces.train_state(),
-        "n_suggestions": len(faces.suggest_merges()),
+        "n_suggestions": _n_suggestions(),
         "frames": frame_count,
         "dropped": dropped,
         "has_live": last_live is not None,
@@ -988,6 +1201,8 @@ def reset():
     presence.clear()
     last_people, last_display, last_live = [], dict(QUIET), None
     hold.update(until=0.0, display=None)
+    card_hold.update(card=None, ts=0.0)
+    last_shown.update(card=None, ts=0.0)
     faces.last_far = []
     recent_alerts.clear()
     reports.clear()

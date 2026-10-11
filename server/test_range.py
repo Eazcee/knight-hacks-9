@@ -79,7 +79,7 @@ check(right == len(far), f"every far match is the same person as up close ({righ
 check(len(c.get("/people").json()) == n_people, "far faces never create new people")
 r2 = post("/frame", frame_with_faces(30))
 check(all(p["confirmed"] for p in r2["people"] if p["tier"] == "far"), "second far sighting confirms them")
-check(r2["display"]["lines"] and any(n in " ".join(r2["display"]["lines"]) for n in names), f"glasses card names far people: {r2['display']['lines']}")
+check(r2["display"]["title"].endswith("people") and any(n in " ".join(r2["display"]["lines"]) for n in names), f"glasses card names far people: {r2['display']['title']} / {r2['display']['lines']}")
 
 # 3. even further: faces ~22 px still matched; ~12 px ignored (too small)
 r = post("/frame", frame_with_faces(22))

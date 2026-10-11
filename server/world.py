@@ -15,7 +15,8 @@ import os
 import numpy as np
 
 EYE_M = 1.6
-STAMP_MAX_M = 20.0
+STAMP_MAX_M = 8.0         # keep the near field only: the net's far field is a smear, and the next place's snapshot covers it
+U_MIN, U_MAX = -1.2, 4.0  # floor to ceiling (meters above the ground, with slack for the camera's unknown vertical FOV); the rest is sky / the net guessing
 STAMP_STRIDE = 2          # keep every 2nd cell of the depth map (72x128 -> 36x64 vertices)
 MAX_STAMPS = 400
 MAGIC = 0xBEAC0003
@@ -57,7 +58,7 @@ class World:
         n = -xc * math.sin(h) + z * math.cos(h) + y
         u = yc + EYE_M
         xyz = np.stack([e, n, u], axis=2).astype(np.float32)
-        xyz[z >= STAMP_MAX_M] = np.nan
+        xyz[(z >= STAMP_MAX_M) | (u < U_MIN) | (u > U_MAX)] = np.nan
         rgb = np.ascontiguousarray(color[::s, ::s]).astype(np.uint8)
         depth = np.ascontiguousarray(z).astype(np.float32)
         self.stamps[nid] = {"xyz": xyz, "rgb": rgb, "depth": depth, "x": x, "y": y, "heading": heading, "ts": ts}
@@ -94,7 +95,9 @@ class World:
             for nid, s in self.stamps.items():
                 gh, gw = s["depth"].shape
                 parts.append(np.array([nid, gw, gh, 0], np.uint32).tobytes())
-                parts.append(s["xyz"].tobytes())
+                xyz = s["xyz"].copy()   # older snapshots were saved with a longer reach: trim them the same way
+                xyz[(s["depth"] >= STAMP_MAX_M) | (xyz[..., 2] < U_MIN) | (xyz[..., 2] > U_MAX)] = np.nan
+                parts.append(xyz.tobytes())
                 parts.append(s["depth"].tobytes())
                 rgb = s["rgb"].tobytes()
                 parts.append(rgb + b"\0" * (-len(rgb) % 4))

@@ -216,7 +216,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
         <h2>3D view
           <span class="right"><button id="d3live" class="primary" onclick="d3mode('live')">Live</button><button id="d3world" onclick="d3mode('world')">World</button>
           <button onclick="api('/world/snapshot',{method:'POST'}).then(r=>toast('Snapshot saved · '+r.stamps+' places in 3D')).catch(()=>{})" title="Freeze the current 3D view at this spot">📸 Snapshot</button>
-          <button class="ghost" onclick="d3reset()" title="Reset the camera angle">↺</button><button class="ghost" id="d3bigBtn" onclick="d3big()">⤢ Bigger</button></span></h2>
+          <button class="ghost" onclick="d3reset()" title="Reset the camera angle">↺</button><button class="ghost" id="d3bigBtn" onclick="d3big()">⤢ Bigger</button><button class="ghost" id="d3clear" style="display:none" title="Delete every 3D snapshot (places and paths stay)" onclick="api('/world/clear',{method:'POST'}).then(()=>{toast('3D snapshots cleared');tick()}).catch(()=>{})">🗑 Clear 3D</button></span></h2>
         <div class="muted" id="d3info" style="font-size:12px;margin:-4px 0 8px;min-height:14px"></div>
         <div class="d3wrap"><canvas id="d3"></canvas><div id="d3labels"></div><div class="d3empty" id="d3empty">Depth appears when the glasses stream.<br><small>Drag to orbit · wheel to zoom</small></div></div>
         <small class="muted" id="d3help">What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.</small>
@@ -339,7 +339,7 @@ function renderLive(){
 // ---------------- 3D view (point cloud from the depth net)
 const D3={ready:false,pts:null,geo:null,cam:null,scene:null,ren:null,az:Math.PI,el:0.35,dist:6,tgt:null,drag:null,busy:false,last:0,n:0,
   mode:'live',wmesh:null,wmat:null,wgroup:null,wrev:-1,wn:0,you:null,cone:null};
-function d3mode(m){D3.mode=m;$('d3live').className=m==='live'?'primary':'';$('d3world').className=m==='world'?'primary':'';
+function d3mode(m){D3.mode=m;$('d3live').className=m==='live'?'primary':'';$('d3world').className=m==='world'?'primary':'';$('d3clear').style.display=m==='world'?'':'none';
   if(D3.ready){D3.grid.position.y=m==='world'?0:-1.6;D3.pts.visible=m==='live';D3.wmesh.visible=m==='world';D3.wgroup.visible=m==='world';D3.cone.visible=m==='live';D3.you.visible=m==='world';
     if(m==='world'){D3.az=Math.PI*0.8;D3.el=0.7;D3.dist=28;renderWorld(true)}else{D3.tgt.set(0,0,4);d3reset()}}
   $('d3help').textContent=m==='live'?'What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.'
@@ -418,8 +418,11 @@ function stampMesh(buf,off){
   for(let i=0;i<nv;i++){const okv=isFinite(xyz[i*3]);if(okv)n++;
     pos[i*3]=okv?xyz[i*3]:0;pos[i*3+1]=okv?xyz[i*3+2]:0;pos[i*3+2]=okv?-xyz[i*3+1]:0;
     col[i*3]=rgb[i*3]/255;col[i*3+1]=rgb[i*3+1]/255;col[i*3+2]=rgb[i*3+2]/255}
-  const idx=[];const ok=(a,b,c)=>{const da=dep[a],db=dep[b],dc=dep[c];if(!isFinite(xyz[a*3])||!isFinite(xyz[b*3])||!isFinite(xyz[c*3]))return false;
-    const mx=Math.max(da,db,dc),mn=Math.min(da,db,dc);return mx-mn<0.5||mx/mn<1.35};
+  // a triangle is kept only if it's small for its distance: long thin ones are the net smearing a wall or the floor away into the distance
+  const d2=(a,b)=>{const dx=pos[a*3]-pos[b*3],dy=pos[a*3+1]-pos[b*3+1],dz=pos[a*3+2]-pos[b*3+2];return dx*dx+dy*dy+dz*dz};
+  const idx=[];const ok=(a,b,c)=>{if(!isFinite(xyz[a*3])||!isFinite(xyz[b*3])||!isFinite(xyz[c*3]))return false;
+    const da=dep[a],db=dep[b],dc=dep[c],mx=Math.max(da,db,dc),mn=Math.min(da,db,dc);if(mx/mn>1.3&&mx-mn>0.4)return false;
+    const e=0.3+0.12*(da+db+dc)/3,e2=e*e;return d2(a,b)<e2&&d2(b,c)<e2&&d2(a,c)<e2};
   for(let r=0;r<gh-1;r++)for(let c=0;c<gw-1;c++){const a=r*gw+c,b=a+1,d=a+gw,e=d+1;if(ok(a,b,d))idx.push(a,d,b);if(ok(b,d,e))idx.push(b,d,e)}
   if(!n)return {mesh:null,n:0,next:off};
   const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.BufferAttribute(pos,3));geo.setAttribute('color',new THREE.BufferAttribute(col,3));geo.setIndex(idx);

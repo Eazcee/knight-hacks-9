@@ -1,13 +1,10 @@
-"""Shared database operations with a local SQLite implementation.
+"""Database operations shared by Beacon's Neon repository.
 
 Everything the glasses learn lives here. Embeddings ("face fingerprints") are
-stored as raw float32 blobs, each with the photo it came from, so you can see
-and curate every person's training set.
+stored with the photo they came from so every person's training set remains
+inspectable and correctable.
 """
-import sqlite3
-import threading
 import time
-from contextlib import contextmanager
 from functools import wraps
 
 import numpy as np
@@ -21,125 +18,15 @@ def atomic(method):
             return method(self, *args, **kwargs)
     return wrapped
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS people (
-    id          TEXT PRIMARY KEY,
-    name        TEXT,
-    notes       TEXT DEFAULT '',
-    is_watch    INTEGER DEFAULT 0,
-    watch_label TEXT DEFAULT '',
-    crop        TEXT,
-    created_at  REAL,
-    last_seen   REAL
-);
-CREATE TABLE IF NOT EXISTS embeddings (
-    person_id   TEXT,
-    vec         BLOB,
-    created_at  REAL
-);
-CREATE TABLE IF NOT EXISTS sightings (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    person_id   TEXT,
-    ts          REAL,
-    node_id     INTEGER,
-    x           REAL,
-    y           REAL,
-    sim         REAL,
-    crop        TEXT
-);
-CREATE TABLE IF NOT EXISTS categories (
-    name        TEXT PRIMARY KEY,
-    sort        INTEGER DEFAULT 0,
-    created_at  REAL
-);
-CREATE TABLE IF NOT EXISTS nodes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT,
-    x           REAL,
-    y           REAL,
-    keyframe    TEXT,
-    qr          TEXT,
-    created_at  REAL,
-    visits      INTEGER DEFAULT 1
-);
-CREATE TABLE IF NOT EXISTS edges (
-    a           INTEGER,
-    b           INTEGER,
-    dist        REAL,
-    crowd       REAL DEFAULT 0,
-    blocked     INTEGER DEFAULT 0,
-    PRIMARY KEY (a, b)
-);
-"""
-
-# Columns added after the first version. Added in place so existing data survives.
-MIGRATIONS = {
-    "embeddings": {"crop": "TEXT", "quality": "REAL DEFAULT 0", "source": "TEXT DEFAULT 'auto'"},
-    "sightings": {"frame": "TEXT", "box": "TEXT", "quality": "REAL DEFAULT 0", "lat": "REAL", "lng": "REAL"},
-    "nodes": {"lat": "REAL", "lng": "REAL"},
-    "people": {"met": "INTEGER DEFAULT 0", "met_at": "REAL", "met_lat": "REAL", "met_lng": "REAL", "category": "TEXT"},
-}
-
-
-class DB:
-    backend = "sqlite"
-
-    def __init__(self, path="data/beacon.db"):
-        self.conn = sqlite3.connect(path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        # WAL + normal sync: commits stop waiting on the disk every time (big win on Windows)
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.lock = threading.RLock()
-        self._transaction_depth = 0
-        with self.lock:
-            self.conn.executescript(SCHEMA)
-            for table, cols in MIGRATIONS.items():
-                have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
-                for col, typ in cols.items():
-                    if col not in have:
-                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
-            self.conn.commit()
-
-    # ---- helpers -------------------------------------------------------
-    @contextmanager
-    def transaction(self):
-        with self.lock:
-            outer = self._transaction_depth == 0
-            if outer:
-                self.conn.execute("BEGIN")
-            self._transaction_depth += 1
-            try:
-                yield
-                if outer:
-                    self.conn.commit()
-            except BaseException:
-                if outer:
-                    self.conn.rollback()
-                raise
-            finally:
-                self._transaction_depth -= 1
+class DatabaseRepository:
+    """Backend-neutral Beacon queries implemented by the Neon adapter."""
 
     def close(self):
         with self.lock:
             self.conn.close()
 
     def _run(self, sql, args=(), fetch=None):
-        with self.lock:
-            try:
-                cur = self.conn.execute(sql, args)
-                if not self._transaction_depth:
-                    self.conn.commit()
-                if fetch == "one":
-                    r = cur.fetchone()
-                    return dict(r) if r else None
-                if fetch == "all":
-                    return [dict(r) for r in cur.fetchall()]
-                return cur.lastrowid
-            except BaseException:
-                if not self._transaction_depth:
-                    self.conn.rollback()
-                raise
+        raise NotImplementedError
 
     # ---- people --------------------------------------------------------
     def add_person(self, pid, name=None, notes="", crop=None, is_watch=0, watch_label=""):
@@ -281,20 +168,7 @@ class DB:
         return vec
 
     def nearest_people(self, vec, limit=2):
-        """Exact cosine search, returning one best similarity per person."""
-        vec = self.validate_embedding(vec)
-        if limit < 1:
-            raise ValueError("limit must be positive")
-        ids, matrix, _ = self.embeddings()
-        if not ids:
-            return []
-        norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(vec)
-        sims = np.divide(matrix @ vec, norms, out=np.zeros(len(ids)), where=norms != 0)
-        best = {}
-        for pid, sim in zip(ids, sims):
-            best[pid] = max(best.get(pid, -float("inf")), float(sim))
-        return [{"person_id": pid, "sim": sim} for pid, sim in
-                sorted(best.items(), key=lambda item: (-item[1], item[0]))[:limit]]
+        raise NotImplementedError
 
     def embeddings(self):
         """Returns (person_ids, matrix, embedding_ids) for every stored embedding."""
@@ -476,19 +350,3 @@ class DB:
 
     def edges(self):
         return self._run("SELECT * FROM edges", fetch="all")
-
-    @atomic
-    def clear_map(self):
-        """Forget all places (keeps people). Sightings keep their time, lose their place."""
-        with self.lock:
-            self.conn.execute("DELETE FROM nodes")
-            self.conn.execute("DELETE FROM edges")
-            self.conn.execute("UPDATE sightings SET node_id=NULL")
-            self.conn.execute("DELETE FROM sqlite_sequence WHERE name='nodes'")
-
-    @atomic
-    def wipe(self):
-        with self.lock:
-            for t in ("people", "embeddings", "sightings", "nodes", "edges", "categories"):
-                self.conn.execute(f"DELETE FROM {t}")
-            self.conn.execute("DELETE FROM sqlite_sequence")  # place ids restart at 1

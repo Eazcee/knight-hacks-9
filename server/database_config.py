@@ -1,4 +1,4 @@
-"""Load Neon CLI's local environment without overriding exported variables."""
+"""Load and validate the Neon database configuration."""
 import os
 from pathlib import Path
 
@@ -11,13 +11,14 @@ def load_database_env():
     load_dotenv(root / ".env", override=False)
 
 
-def open_database(sqlite_path):
-    from db import DB
-
+def open_database():
     load_database_env()
     url = os.environ.get("DATABASE_URL")
-    if url:
-        from postgres_db import PostgresDB
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL is required. Run `npx neon@latest env --write .env.local` "
+            "or copy .env.example and add your Neon connection string."
+        )
+    from neon_database import NeonDatabase
 
-        return PostgresDB(url)
-    return DB(sqlite_path)
+    return NeonDatabase(url)

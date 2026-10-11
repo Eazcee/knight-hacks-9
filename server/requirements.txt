@@ -1,4 +1,7 @@
--r requirements-db.txt
+numpy>=1.26,<3
+psycopg[binary]>=3.2,<4
+pgvector>=0.3,<1
+python-dotenv>=1.0,<2
 insightface>=0.7,<1
 onnxruntime>=1.18,<2
 opencv-python>=4.9,<5

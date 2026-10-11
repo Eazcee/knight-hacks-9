@@ -1,113 +1,66 @@
-# Neon migration handoff
+# Neon setup
 
-## Goal
-
-Move Beacon's application data from the local SQLite file to Neon Postgres so people, face embeddings, sightings, places, and map edges are stored in a shared cloud database.
-
-Neon will store application records. InsightFace will continue to run in the Python server and perform face detection and recognition. The Android app will continue sending camera frames to the Python server.
+Beacon uses Neon Postgres as its only application database. Face detection and
+embedding generation run in the Python server; Neon stores people, 512-D
+pgvector embeddings, sightings, categories, places, and map edges.
 
 ```text
-Glasses -> Android app -> Python/FastAPI server -> Neon Postgres
-                                |
-                                +-> InsightFace recognition
+Glasses -> Android app -> Python/FastAPI + InsightFace -> Neon Postgres
+                                                   \-> Neon Object Storage
 ```
 
-## Current state
+## Project
 
-The repository's Git branch is `neon` and tracks `origin/neon`.
-
-Neon infrastructure is set up:
-
-- Project: `Recall`
-- Project ID: `old-moon-99463704`
+- Neon project: `Recall` (`rough-math-87664804`)
+- Database branch: `production`
 - Region: `aws-us-east-2`
-- PostgreSQL: version 18
-- Current Neon database branch: `production`
-- `neon.ts` declares the base Postgres configuration.
-- `neon deploy` completed successfully.
-- Neon CLI skills and project dependencies are committed.
-- `.neon`, `.env.local`, and `node_modules/` are ignored by Git.
-- Psycopg 3 is installed in the local `server/.venv`.
+- Postgres: version 18 with `vector`
+- Private bucket: `recall-images`
 
-The application has not been migrated yet. `server/db.py` still uses SQLite, and Neon does not yet contain Beacon's tables or face data.
+Git branches and Neon database branches are separate. The Git branch is named
+`neon`; the linked Neon database branch is named `production`.
 
-Git branches and Neon database branches are separate. The Git branch happens to be named `neon`; the linked Neon database branch is currently named `production`.
-
-## Continue setup on another computer
-
-Check out the handoff branch and install the committed Node dependencies:
+## Set up a checkout
 
 ```sh
 git switch neon
 npm install
-```
+npx -y neon@latest login
+npx -y neon@latest link --project-id rough-math-87664804 --branch production -y
+npx -y neon@latest env --write .env.local
 
-Install and authenticate the Neon CLI if needed, then link this checkout:
-
-```sh
-npm i -g neon@latest
-neon login
-neon link --project-id old-moon-99463704 --branch production -y
-```
-
-Linking writes the ignored `.neon` file and pulls connection variables into the ignored `.env.local`. Access to the Neon project must be granted separately; credentials must never be committed.
-
-Create a Python environment:
-
-```sh
 cd server
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "psycopg[binary]"
+pip install -r requirements.txt
+python migrate.py
+uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
-A dependency file still needs to be added, so this manual Psycopg command is temporary.
+`.env.local`, `.neon`, model files, and runtime data are local-only and must
+never be committed. Server startup fails when `DATABASE_URL` is absent; there
+is no hidden SQLite fallback.
 
-## Work remaining
+Use the pooled `DATABASE_URL` for the application and the direct
+`DATABASE_URL_UNPOOLED` for migrations. Migrations are versioned under
+`server/migrations/` and validated by checksum.
 
-1. Add a Python dependency file such as `server/requirements.txt`, including `psycopg[binary]` and the server's other runtime dependencies.
-2. Create a Neon development branch before changing the schema. Do not test the migration directly on `production`.
+## Files
 
-   ```sh
-   neon checkout dev-neon-migration --create
-   ```
+- `server/database_repository.py` — shared Beacon data operations
+- `server/neon_database.py` — Psycopg and pgvector implementation
+- `server/database_config.py` — required connection configuration
+- `server/migrate.py` — migration runner
+- `server/migrations/` — versioned Postgres schema
+- `neon.ts` — Neon service policy, including the private bucket
 
-   This updates the ignored local Neon pointer and pulls that branch's environment variables.
-3. Add versioned SQL migration files for the existing SQLite tables:
-   - `people`
-   - `embeddings`
-   - `sightings`
-   - `nodes`
-   - `edges`
-4. Translate SQLite-specific schema features to Postgres:
-   - `BLOB` to `BYTEA` for face embeddings
-   - SQLite autoincrement IDs to Postgres identity columns
-   - SQLite migration pragmas to normal versioned migrations
-   - SQLite upsert syntax to Postgres `ON CONFLICT`
-5. Rewrite `server/db.py` to connect with Psycopg:
-   - Use pooled `DATABASE_URL` for normal server traffic.
-   - Use direct `DATABASE_URL_UNPOOLED` for schema migrations.
-   - Change SQLite `?` parameters to Psycopg `%s` parameters.
-   - Return dictionary-like rows so the existing server code continues working.
-   - Keep transaction and thread behavior safe for FastAPI's worker threads.
-6. Update remaining SQLite-specific SQL in `server/server.py`, including queries that use `rowid` or `?` placeholders.
-7. Test the complete flow on the Neon development branch:
-   - Create, rename, merge, and delete people.
-   - Store and reload 512-dimensional face embeddings.
-   - Add, move, and delete sightings.
-   - Add places and map edges.
-   - Restart the server and confirm recognition data reloads correctly.
-8. Decide whether existing SQLite data needs to be migrated. If it does, write a one-time migration that preserves IDs, embeddings, timestamps, and relationships.
-9. Decide where JPEG crops, full frames, and keyframes should live. They currently remain under `server/data/` on one computer. Neon Postgres stores database records, not those local files. Neon Object Storage or another object store is needed if multiple server machines must access them.
-10. After testing, apply the schema migration to `production`, switch the server to the production connection, and run an end-to-end test from glasses to Android to Python to Neon.
+JPEG crops, frames, and keyframes still live under `server/data/`. The private
+bucket is provisioned and verified, but wiring those files into Object Storage
+is the next storage task.
 
-## Definition of done
+## Testing safety
 
-The switch is complete when:
-
-- Starting the Python server requires `DATABASE_URL` and no longer creates or opens `data/beacon.db`.
-- All database tests pass against a disposable Neon branch.
-- The production schema is created through committed migration files.
-- A person enrolled from the glasses remains available after restarting the Python server.
-- Another authorized developer can clone the repository, install dependencies, link Neon, and run the server without undocumented setup.
-- No database passwords, connection strings, face photographs, or embeddings are committed to Git.
+The end-to-end scripts reset their database. Never point them at production.
+Create a disposable Neon database branch and export its pooled URL as
+`BEACON_TEST_DATABASE_URL` before running them. The scripts refuse to start
+without that explicit variable.

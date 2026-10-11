@@ -45,7 +45,7 @@ FACE_W_M = 0.15              # average face width, for distance from face size
 os.makedirs(DATA, exist_ok=True)
 for d in DIRS.values():
     os.makedirs(d, exist_ok=True)
-db = open_database(os.path.join(DATA, "beacon.db"))
+db = open_database()
 print(f"Beacon database: {db.backend}")
 db.prune_anonymous(RETENTION_H * 3600)
 faces = FaceEngine(db, crops_dir=DIRS["crops"], auto_enroll=AUTO_ENROLL)

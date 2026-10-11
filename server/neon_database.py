@@ -1,4 +1,4 @@
-"""Neon/Postgres storage, preserving the server's existing DB interface."""
+"""Neon Postgres storage for Beacon."""
 from contextlib import contextmanager
 import re
 import threading
@@ -8,10 +8,10 @@ import psycopg
 from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
 
-from db import DB, atomic
+from database_repository import DatabaseRepository, atomic
 
 
-class PostgresDB(DB):
+class NeonDatabase(DatabaseRepository):
     backend = "postgres"
 
     def __init__(self, url):
@@ -41,18 +41,18 @@ class PostgresDB(DB):
         if row is None:
             return None
         row = dict(row)
-        # Match SQLite's snapshot format for undo/restore and the NumPy gallery.
+        # Match the repository's snapshot format for undo/restore and the NumPy gallery.
         if "vec" in row:
             value = row["vec"]
             if hasattr(value, "to_numpy"):
                 value = value.to_numpy()
             row["vec"] = np.asarray(value, dtype=np.float32).tobytes()
-        # SQLite's implicit rowid is excluded from SELECT *.
+        # The embedding storage ID is exposed only when explicitly requested.
         row.pop("rowid", None)
         return row
 
     def _run(self, sql, args=(), fetch=None):
-        # Internal DB statements use qmark parameters; values stay separately bound.
+        # Shared repository statements use qmark parameters; values stay separately bound.
         # These statements contain no literal question marks or %-format operators.
         sql = sql.replace("?", "%s")
         args = tuple(np.frombuffer(a, dtype=np.float32).copy()

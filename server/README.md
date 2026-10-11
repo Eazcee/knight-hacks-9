@@ -38,16 +38,22 @@ On the dashboard's Watchlist, **Search area** (for someone who was seen at a kno
 ## 1. Run it (5 minutes)
 
 ```bash
-pip install insightface onnxruntime opencv-python fastapi "uvicorn[standard]" python-multipart numpy requests scikit-image httpx
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python migrate.py
 uvicorn server:app --host 0.0.0.0 --port 8000
 ```
+The server requires the Neon `DATABASE_URL` and `DATABASE_URL_UNPOOLED` values
+in the repository-root `.env.local`; see [`../NEON.md`](../NEON.md).
 First start downloads the face models (~280 MB, from GitHub). Then open **http://localhost:8000** for the dashboard.
 
-Test everything with no hardware:
+The end-to-end scripts reset their database. Run them only with a disposable
+Neon branch supplied as `BEACON_TEST_DATABASE_URL`, never production:
 ```bash
-python test_demo.py          # simulated walk + people + alert + reroute (all should PASS)
-python test_training.py      # photos, quality, train mode, merge, remove, map clear (all should PASS)
-python test_range.py         # far faces, "possible" alerts, Scan on a 12 MP photo (all should PASS)
+BEACON_TEST_DATABASE_URL='postgresql://...' python test_demo.py
+BEACON_TEST_DATABASE_URL='postgresql://...' python test_training.py
+BEACON_TEST_DATABASE_URL='postgresql://...' python test_range.py
 python sim_walk.py --reset   # fake GPS walk: watch the map build, pins appear, a route draw and reroute
 python webcam_client.py --show --lat 28.6024 --lng -81.2001   # laptop webcam → server, faces get pins
 ```
@@ -150,6 +156,6 @@ Navigation needs no new glasses UI: the turn-by-turn is just another `display` c
 Say on stage: strangers are kept as anonymous ids only, un-annotated ones expire, alerts match only loaded photos, and there's a one-tap wipe. That's the difference between this and the Harvard project.
 
 ## 6. Files
-- `server.py` — API · `dashboard.html` — the big-screen dashboard (Leaflet in `static/`) · `faces.py` — recognition + training sets · `geo.py` — GPS, walk graph, A*, turn-by-turn · `db.py` — SQLite
+- `server.py` — API · `dashboard.html` — the big-screen dashboard (Leaflet in `static/`) · `faces.py` — recognition + training sets · `geo.py` — GPS, walk graph, A*, turn-by-turn · `database_repository.py` + `neon_database.py` — Neon Postgres and pgvector
 - `sim_walk.py` — fake GPS walk for rehearsals · `webcam_client.py` — frames from webcam/video · `test_demo.py`, `test_training.py`, `test_range.py` — all should say `ALL PASSED`
-- `data/` — database, face crops, frames, settings (created on first run)
+- `data/` — local face crops, frames, and settings (created on first run); application records live in Neon

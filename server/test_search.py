@@ -11,6 +11,10 @@ import time
 import cv2
 import numpy as np
 
+test_database_url = os.environ.get("BEACON_TEST_DATABASE_URL")
+if not test_database_url:
+    raise SystemExit("Set BEACON_TEST_DATABASE_URL to a disposable Neon branch; never use production")
+os.environ["DATABASE_URL"] = test_database_url
 os.environ.setdefault("BEACON_DATA", "data_test_search")
 from fastapi.testclient import TestClient  # noqa: E402
 

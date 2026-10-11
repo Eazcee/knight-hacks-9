@@ -46,7 +46,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .banner.train{background:#2a2310;border-color:#5a4a1a}
 .progress{height:6px;background:#2b2f36;border-radius:3px;overflow:hidden;flex:1;min-width:80px}
 .progress i{display:block;height:100%;background:var(--warn)}
-.people{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.people{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
 .card{position:relative;background:var(--panel2);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:border-color .15s,transform .15s}
 .card:hover{border-color:#4b5563;transform:translateY(-1px)}
 .card .ph{aspect-ratio:1;background:#0b0d10 center/cover no-repeat;position:relative}
@@ -138,6 +138,10 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .cat-h button{padding:2px 8px;font-size:12px}
 .cat .people{min-height:60px}
 .card.dragging{opacity:.4}
+.card .sub2{font-size:12px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .note{color:#d6c9a3}
+.card .cacts{display:flex;gap:4px;margin-top:6px}
+.card .cacts button{flex:1;padding:3px 4px;font-size:11px}
 .card .del{position:absolute;top:6px;right:6px;z-index:2;display:none;width:26px;height:26px;padding:0;border-radius:50%;background:rgba(20,10,10,.85);border:1px solid #6b2a2a;color:#ff8a8a;font-size:14px;line-height:1}
 .card:hover .del{display:block}
 .card .del:hover{background:#ef4444;color:#fff}
@@ -233,9 +237,9 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
         <span class="spacer"></span>
         <label><input type="checkbox" id="convoOn" onchange="saveSettings()"> green after</label>
         <input type="number" id="convoS" min="3" step="5" onchange="saveSettings()"> s in view
-        <span class="reachctl" title="Click a person's pin to see how far they could have walked. Drag the slider to add time; 0 = time since you last saw them.">
-          ⏱ <input type="range" id="reachMin" min="0" max="60" step="1" value="0" oninput="reachMinutes=+this.value;drawMap()">
-          <b id="reachLbl">click a pin</b>
+        <span class="reachctl" title="Click a person's pin to see how far they could have walked since you last saw them.">
+          ⏱ <input type="range" id="reachMin" min="0" max="120" step="1" value="0" title="Starts at the time since you last saw them; drag right to predict further ahead" oninput="reachMinutes=+this.value;drawMap()">
+          <b id="reachLbl">click a pin</b> <button id="reachFind" style="display:none;padding:2px 8px;font-size:12px" onclick="startSearch(selectedPin,Math.max(1,Math.round(reachShownMin)))">🏢 Find buildings</button>
           · <input type="number" id="mpm" min="8" max="40" step="0.5" style="width:56px;padding:2px 5px" onchange="api('/settings',{method:'POST',json:{walk_min_per_mile:+this.value||16.5}}).then(tick)"> min/mi</span>
         <span title="Click a pin for notes and Navigate. Click the map to navigate to a spot. Click a path to block it.">ⓘ</span>
       </div>
@@ -374,14 +378,21 @@ function renderTrain(){
 }
 let dragging=null;
 function personCard(p,inView){
-  const sub=[p.met_place?'met at '+esc(p.met_place):'',p.first_seen_ago?esc(p.first_seen_ago):''].filter(Boolean).join(' · ')||'—';
+  const live=inView.has(p.id);
+  const seen=live?'<span style="color:#4cc38a;font-weight:600">● in view now</span>'
+    :`<b>Last seen ${esc(p.last_seen_ago||'—')}</b>${p.last_seen_place?' · '+esc(p.last_seen_place):''}`;
+  const met=p.first_seen_ago?`${p.met?'Talked':'Met'} ${esc(p.first_seen_ago)}${p.met_place?' · '+esc(p.met_place):''}`:'';
   return `<div class="card" draggable="true" data-pid="${p.id}"><button class="del" title="Delete (you can undo)" onclick="delPersonQuick(event,'${p.id}')">✕</button>
-    <div class="ph" onclick="openPerson('${p.id}')" style="background-image:url('${p.photo||''}');box-shadow:inset 0 0 0 4px ${p.met?'#4cc38a':'#ef4444'}">${p.is_watch?'<span class="badge watch badge">ALERT</span>':''}${p.met?'<span class="badge tk">talked</span>':''}${inView.has(p.id)?'<span class="live-dot" title="in view now"></span>':''}</div>
+    <div class="ph" onclick="openPerson('${p.id}')" style="background-image:url('${p.photo||''}');box-shadow:inset 0 0 0 4px ${p.met?'#4cc38a':'#ef4444'}">${p.is_watch?'<span class="badge watch badge">ALERT</span>':''}${p.met?'<span class="badge tk">talked</span>':''}${live?'<span class="live-dot" title="in view now"></span>':''}</div>
     <div class="meta"><div class="nm" onclick="editName(event,'${p.id}')" title="Click to rename">${esc(p.name||'Unknown')}</div>
-    ${p.notes?`<div class="sub" title="${esc(p.notes)}">${esc(p.notes)}</div>`:''}
-    <div class="sub" title="Where and when you first met">${sub}</div>
-    <div class="sub" title="Photos recognition compares new faces against (more angles = better). Seen = times logged.">${p.n_train||0} photos · seen ${p.n_seen||0}× · ${esc(p.last_seen_ago||'')}</div></div></div>`;
+    <div class="sub2" title="${esc((p.last_seen_place||'')+' '+(p.last_seen_ago||''))}">${seen}</div>
+    ${p.notes?`<div class="sub note" title="${esc(p.notes)}">📝 ${esc(p.notes)}</div>`:''}
+    ${met?`<div class="sub" title="${esc(met)}">${met}</div>`:''}
+    <div class="sub" title="Photos recognition compares new faces against (more angles = better). Seen = times logged.">${p.n_train||0} photos · seen ${p.n_seen||0}×${p.category?' · '+esc(p.category):''}</div>
+    <div class="cacts"><button onclick="event.stopPropagation();showOnMap('${p.id}')" title="Show where they could be now">📍 Map</button><button onclick="event.stopPropagation();navTo('${p.id}')">Navigate</button></div></div></div>`;
 }
+function showOnMap(pid){const p=S.map.pins.find(q=>q.id===pid);if(!p){toast('No map position for them yet');return}
+  follow=false;$('followBtn').textContent='Follow';selectPin(pid);MR.setView(p.lat,p.lng,17);$('map').scrollIntoView({behavior:'smooth',block:'center'})}
 function renderPeople(){
   if(dragging||document.querySelector('.card .nm input'))return;   // don't redraw under the mouse
   const inView=new Set(S.last_people.map(p=>p.person_id));
@@ -584,8 +595,8 @@ document.addEventListener('keydown',e=>{
 });
 
 // ---------------- map: two renderers (Leaflet + Esri tiles by default; Google Maps when a key is saved)
-let selectedPin=null,reachMinutes=0;
-function selectPin(pid){selectedPin=pid;drawMap()}
+let selectedPin=null,reachMinutes=0,reachShownMin=0;
+function selectPin(pid){if(pid!==selectedPin)reachMinutes=0;selectedPin=pid;drawMap()}
 let follow=true,mapReady=false,centered=false,MR=null,gmapsTried=false,mapInitStarted=false;
 const PIN_HTML=(p,off)=>`<div class="pinoff" style="transform:translate(${off[0]}px,${off[1]}px)"><div class="pin ${p.met?'met':''} ${p.is_watch?'watch':''} ${p.in_view?'live':''} ${selectedPin&&selectedPin!==p.id?'dim':''} ${selectedPin===p.id?'sel':''}" title="${esc(p.name||'Unknown')}"><img src="${p.photo||''}" alt=""></div></div>`;
 const YOU_HTML=pos=>pos.heading!=null?`<div class="you" style="transform:rotate(${pos.heading}deg)"></div>`:'<div class="youdot"></div>';
@@ -669,7 +680,7 @@ const GoogleMap={
 
 function initMap(){
   const onDrag=()=>{follow=false;$('followBtn').textContent='Follow'};
-  const onClick=(lat,lng)=>{if(selectedPin){selectedPin=null;reachMinutes=0;$('reachMin').value=0;drawMap();return}MR.popup(lat,lng,`<b>${lat.toFixed(5)}, ${lng.toFixed(5)}</b><div class="row" style="margin-top:8px"><button onclick="navToPoint(${lat},${lng})">Navigate here</button></div>`)};
+  const onClick=(lat,lng)=>{if(selectedPin){selectedPin=null;reachMinutes=0;drawMap();return}MR.popup(lat,lng,`<b>${lat.toFixed(5)}, ${lng.toFixed(5)}</b><div class="row" style="margin-top:8px"><button onclick="navToPoint(${lat},${lng})">Navigate here</button></div>`)};
   MR=null;
   if(window.google&&google.maps&&google.maps.Map&&GoogleMap.init(onDrag,onClick)){MR=GoogleMap;$('mapKind').textContent='Google Maps'}
   else if(LeafletMap.init(onDrag,onClick)){MR=LeafletMap;$('mapKind').textContent='Esri imagery'}
@@ -702,7 +713,8 @@ function pinPopup(p){
    <small>${p.met?'<span style="color:#4cc38a">talked</span>':'<span style="color:#ff8a8a">seen</span>'} · ${esc(p.last_seen_ago||'')}${p.in_view?' · in view':''}</small></div></div>
    <textarea id="pn_${p.id}" placeholder="Note to remember them by…">${esc(p.notes||'')}</textarea>
    <div class="row" style="margin-top:6px"><button class="primary" onclick="saveNote('${p.id}')">Save note</button>
-   <button onclick="navTo('${p.id}')">Navigate</button><button class="ghost" onclick="openPerson('${p.id}')">Open</button></div>`;
+   <button onclick="navTo('${p.id}')">Navigate</button><button class="ghost" onclick="openPerson('${p.id}')">Open</button></div>
+   <div class="row" style="margin-top:6px"><button style="width:100%;border-color:#6b2a2a" onclick="MR.closePopup();startSearch('${p.id}',selectedPin==='${p.id}'?Math.max(1,Math.round(reachShownMin)):0)" title="Every main building inside their bubble, in search order, with a route to the first">🏢 Find buildings they could be in</button></div>`;
 }
 async function saveNote(pid){const t=$('pn_'+pid);if(!t)return;await api(`/people/${pid}`,{method:'POST',json:{notes:t.value}});toast('Note saved');lastPeopleKey=''}
 async function navTo(pid){try{const r=await api('/route?to_person='+pid);toast(r.ok?`Navigating: ${r.remaining_m} m ${r.mode==='compass'?'(direct, no walked path yet)':'along walked paths'}`:'No route: '+r.reason);MR&&MR.closePopup()}catch(e){}}
@@ -750,6 +762,9 @@ function drawMap(){
   if(z){
     MR.circle('s_reach_now',z.lat,z.lng,z.reach_now_m,{color:'#f59e0b',fill:.03,weight:1,opacity:.6});keep.add('s_reach_now');
     MR.circle('s_area',z.lat,z.lng,z.radius_m,{color:'#ef4444',fill:.08,weight:2,opacity:.9});keep.add('s_area');
+    const tour=z.buildings.filter(b=>!b.checked);const ti=tour.findIndex(b=>b.next);
+    const ord=ti>0?tour.slice(ti).concat(tour.slice(0,ti)):tour;
+    if(ord.length>1){MR.polyline('s_tour',ord.map(b=>[b.lat,b.lng]),{color:'#f59e0b',weight:2,opacity:.75,dash:'4 6',z:3});keep.add('s_tour')}
     MR.marker('s_last',z.lat,z.lng,{html:'<div class="lastseen" title="last seen">!</div>',w:30,h:30,z:950,title:'last seen '+z.seen_ago});keep.add('s_last');
     z.buildings.forEach(b=>{const k='b'+b.id;keep.add(k);
       MR.marker(k,b.lat,b.lng,{html:`<div class="bmk ${b.checked?'done':''} ${b.next?'next':''}" title="${esc(b.name)}">${b.order}</div>`,w:b.next?26:20,h:b.next?26:20,z:b.next?940:(b.checked?200:600),title:b.name,
@@ -762,11 +777,14 @@ function drawMap(){
   const sel=selectedPin&&m.pins.find(p=>p.id===selectedPin);
   if(sel){
     const mpm=S.settings.walk_min_per_mile||16.5;
-    const mins=reachMinutes>0?reachMinutes:Math.max(0,(Date.now()/1000-(sel.last_seen||Date.now()/1000))/60);
-    const miles=mins/mpm;const r=Math.max(10,miles*1609.34);
+    const since=Math.max(0,(Date.now()/1000-(sel.last_seen||Date.now()/1000))/60);
+    const mins=Math.max(since,reachMinutes);   // the slider starts at "since last seen" and only goes further
+    if(document.activeElement!==$('reachMin'))$('reachMin').value=Math.round(mins);
+    reachShownMin=mins;const miles=mins/mpm;const r=Math.max(10,miles*1609.34);
     MR.circle('reach',sel.lat,sel.lng,r,{color:sel.is_watch?'#ef4444':(sel.met?'#4cc38a':'#f59e0b'),fill:.12,weight:2,opacity:.9});keep.add('reach');
-    $('reachLbl').textContent=`${sel.name||'Unknown'}: ${mins<1?'<1':Math.round(mins)} min${reachMinutes>0?'':' since seen'} → ${miles<0.1?Math.round(miles*5280)+' ft':miles.toFixed(2)+' mi'}`;
-  }else{$('reachLbl').textContent='click a pin'}
+    $('reachLbl').textContent=`${sel.name||'Unknown'}: ${mins>since+0.5?'+'+Math.round(mins-since)+' min ahead · ':''}${mins<1?'<1':Math.round(mins)} min → ${miles<0.1?Math.round(miles*5280)+' ft':miles.toFixed(2)+' mi'}`;
+    $('reachFind').style.display='';
+  }else{$('reachLbl').textContent='click a pin';$('reachFind').style.display='none'}
   // people pins
   const OFF=fanOut(m.pins);
   m.pins.forEach(p=>{const k='p'+p.id;keep.add(k);

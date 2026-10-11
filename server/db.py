@@ -59,7 +59,9 @@ CREATE TABLE IF NOT EXISTS edges (
 # Columns added after the first version. Added in place so existing data survives.
 MIGRATIONS = {
     "embeddings": {"crop": "TEXT", "quality": "REAL DEFAULT 0", "source": "TEXT DEFAULT 'auto'"},
-    "sightings": {"frame": "TEXT", "box": "TEXT", "quality": "REAL DEFAULT 0"},
+    "sightings": {"frame": "TEXT", "box": "TEXT", "quality": "REAL DEFAULT 0", "lat": "REAL", "lng": "REAL"},
+    "nodes": {"lat": "REAL", "lng": "REAL"},
+    "people": {"met": "INTEGER DEFAULT 0", "met_at": "REAL", "met_lat": "REAL", "met_lng": "REAL"},
 }
 
 
@@ -67,6 +69,9 @@ class DB:
     def __init__(self, path="data/beacon.db"):
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        # WAL + normal sync: commits stop waiting on the disk every time (big win on Windows)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.lock = threading.Lock()
         with self.lock:
             self.conn.executescript(SCHEMA)
@@ -205,11 +210,20 @@ class DB:
         )
 
     # ---- sightings -----------------------------------------------------
-    def add_sighting(self, pid, ts, node_id, x, y, sim, crop=None, frame=None, box=None, quality=0.0):
+    def add_sighting(self, pid, ts, node_id, x, y, sim, crop=None, frame=None, box=None, quality=0.0,
+                     lat=None, lng=None):
         return self._run(
-            "INSERT INTO sightings (person_id, ts, node_id, x, y, sim, crop, frame, box, quality)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (pid, ts, node_id, x, y, sim, crop, frame, box, quality),
+            "INSERT INTO sightings (person_id, ts, node_id, x, y, sim, crop, frame, box, quality, lat, lng)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (pid, ts, node_id, x, y, sim, crop, frame, box, quality, lat, lng),
+        )
+
+    def last_located_sighting(self, pid):
+        """Most recent sighting with a map position."""
+        return self._run(
+            "SELECT s.*, n.name AS place FROM sightings s LEFT JOIN nodes n ON n.id=s.node_id"
+            " WHERE s.person_id=? AND s.lat IS NOT NULL ORDER BY s.ts DESC LIMIT 1",
+            (pid,), fetch="one",
         )
 
     def sighting(self, sid):
@@ -254,10 +268,10 @@ class DB:
         )
 
     # ---- places --------------------------------------------------------
-    def add_node(self, name, x, y, keyframe=None, qr=None):
+    def add_node(self, name, x, y, keyframe=None, qr=None, lat=None, lng=None):
         return self._run(
-            "INSERT INTO nodes (name, x, y, keyframe, qr, created_at) VALUES (?,?,?,?,?,?)",
-            (name, x, y, keyframe, qr, time.time()),
+            "INSERT INTO nodes (name, x, y, keyframe, qr, created_at, lat, lng) VALUES (?,?,?,?,?,?,?,?)",
+            (name, x, y, keyframe, qr, time.time(), lat, lng),
         )
 
     def node(self, nid):
@@ -270,7 +284,11 @@ class DB:
         return self._run("SELECT * FROM nodes WHERE qr=?", (qr,), fetch="one")
 
     def node_by_name(self, name):
-        return self._run("SELECT * FROM nodes WHERE lower(name)=lower(?)", (name,), fetch="one")
+        name = (name or "").strip()
+        n = self._run("SELECT * FROM nodes WHERE lower(name)=lower(?)", (name,), fetch="one")
+        if n is None and name.lower().startswith("place ") and name[6:].strip().isdigit():
+            n = self.node(int(name[6:].strip()))
+        return n
 
     def update_node(self, nid, **fields):
         if not fields:

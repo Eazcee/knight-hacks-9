@@ -37,8 +37,11 @@ class MainActivity : ComponentActivity() {
       }
   private var bluetoothBlocked = false
 
-  private val notificationsRequest =
-      registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+  /** Notifications (the streaming service), location (map) and activity (pedometer), asked together. */
+  private val phonePermissionsRequest =
+      registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        app.sensors.onPermissionsChanged()
+      }
 
   private var wearablePermissionContinuation: CancellableContinuation<PermissionStatus>? = null
   private val wearablePermissionMutex = Mutex()
@@ -72,6 +75,7 @@ class MainActivity : ComponentActivity() {
           glasses = app.glasses,
           onGrantBluetooth = ::requestBluetooth,
           uploader = app.uploader,
+          sensors = app.sensors,
           settings = app.settings,
           onRegister = { app.glasses.register(this) },
           onUnregister = { app.glasses.unregister(this) },
@@ -111,9 +115,16 @@ class MainActivity : ComponentActivity() {
   private fun bootGlasses() {
     app.glasses.initialize()
     if (app.glasses.status.value.sdkReady) handleRegistrationIntent(intent)
-    if (!granted(Manifest.permission.POST_NOTIFICATIONS)) {
-      notificationsRequest.launch(Manifest.permission.POST_NOTIFICATIONS)
-    }
+    // After Bluetooth, so the prompts don't stack.
+    val missing =
+        listOf(
+                Manifest.permission.POST_NOTIFICATIONS,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.ACTIVITY_RECOGNITION,
+            )
+            .filterNot(::granted)
+    if (missing.isNotEmpty()) phonePermissionsRequest.launch(missing.toTypedArray())
   }
 
   /** Registration started from inside the Meta AI app arrives as an intent; continue it. */

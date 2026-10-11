@@ -8,16 +8,19 @@ import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.util.Locale
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -33,7 +36,6 @@ data class UploadStats(
     val sendFps: Double = 0.0,
     val lastLatencyMs: Long? = null,
     val serverDropped: Long = 0,
-    val skippedBusy: Long = 0,
     val errors: Long = 0,
     val lastError: String? = null,
     val lastCard: DisplayCard? = null,
@@ -43,21 +45,24 @@ data class UploadStats(
 /**
  * Turns glasses frames into JPEGs and POSTs them to `<serverUrl>/frame`.
  *
- * The frame collector calls [offer] for every frame; this keeps every [SEND_EVERY_NTH]th one and
- * only while no upload is in flight, so a slow server never queues stale frames and the collector
- * is never blocked (encoding and HTTP happen on [Dispatchers.IO]).
+ * The frame collector calls [offer] for every frame; an upload loop sends the newest one as soon
+ * as the previous /frame response is back, so the upload rate follows the server's speed, stale
+ * frames are never queued, and the collector is never blocked (encoding and HTTP run on IO).
  */
-class FrameUploader(private val settings: Settings) {
+class FrameUploader(private val settings: Settings, private val sensors: PhoneSensors) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val client =
       OkHttpClient.Builder()
           .connectTimeout(3, TimeUnit.SECONDS)
           .readTimeout(10, TimeUnit.SECONDS)
           .build()
-  private val inFlight = AtomicBoolean(false)
   private var frameCounter = 0L
   private val sendTimes = ArrayDeque<Long>()
   private var loggedFormat = false
+  // Round-trip window for logRoundTrip (only touched from the single upload loop).
+  private val rtts = mutableListOf<Long>()
+  private var rttBytes = 0L
+  private var rttWindowStart = 0L
   private var lastSizeLogAt = 0L
   private var framesAtLastSizeLog = 0L
   @Volatile private var lastJpegBytes = 0
@@ -72,6 +77,9 @@ class FrameUploader(private val settings: Settings) {
   fun resetStats() {
     _stats.value = UploadStats()
     frameCounter = 0
+    // Restart the 10 s frame-size log too, or its first fps after a new session goes negative.
+    lastSizeLogAt = 0L
+    framesAtLastSizeLog = 0L
     synchronized(sendTimes) { sendTimes.clear() }
   }
 
@@ -81,33 +89,52 @@ class FrameUploader(private val settings: Settings) {
    */
   @Volatile var holdUploads = false
 
-  /** Called on the frame collector's thread. Copies the buffer only for frames that are sent. */
-  fun offer(buffer: ByteBuffer, width: Int, height: Int) {
-    frameCounter++
-    _stats.update { it.copy(framesReceived = frameCounter) }
-    logFrameSize(width, height)
-    if (holdUploads) return
-    if (frameCounter % SEND_EVERY_NTH != 0L) return
-    if (!inFlight.compareAndSet(false, true)) {
-      _stats.update { it.copy(skippedBusy = it.skippedBusy + 1) }
-      return
-    }
-    val dup = buffer.duplicate()
-    val bytes = ByteArray(dup.remaining())
-    dup.get(bytes)
+  private class PendingFrame(val bytes: ByteArray, val width: Int, val height: Int)
+
+  /**
+   * A one-slot mailbox: each new frame replaces the one waiting, so the upload loop always gets
+   * the newest frame and nothing old is ever queued.
+   */
+  private val latest = Channel<PendingFrame>(Channel.CONFLATED)
+
+  init {
+    // The upload loop: as soon as one /frame round trip finishes, send the newest frame there is.
+    // One request in flight, and at least MIN_GAP_MS between upload starts.
     scope.launch {
-      try {
-        val jpeg = toJpeg(bytes, width, height)
-        if (jpeg != null) post(jpeg)
-      } finally {
-        inFlight.set(false)
+      var lastStart = 0L
+      for (frame in latest) {
+        val wait = MIN_GAP_MS - (SystemClock.elapsedRealtime() - lastStart)
+        val toSend = if (wait > 0) {
+          delay(wait)
+          latest.tryReceive().getOrNull() ?: frame // a newer one may have landed meanwhile
+        } else frame
+        if (holdUploads) continue
+        lastStart = SystemClock.elapsedRealtime()
+        val jpeg = toJpeg(toSend.bytes, toSend.width, toSend.height) ?: continue
+        post(jpeg)
       }
     }
   }
 
+  /** Called on the frame collector's thread for every frame; never blocks it. */
+  fun offer(buffer: ByteBuffer, width: Int, height: Int) {
+    frameCounter++
+    _stats.update { it.copy(framesReceived = frameCounter) }
+    logFrameSize(width, height)
+    if (holdUploads) {
+      latest.tryReceive() // drop anything waiting so it isn't sent when uploads resume
+      return
+    }
+    // The SDK reuses the buffer, so the frame is copied before it's handed over.
+    val dup = buffer.duplicate()
+    val bytes = ByteArray(dup.remaining())
+    dup.get(bytes)
+    latest.trySend(PendingFrame(bytes, width, height))
+  }
+
   private fun post(jpeg: ByteArray) {
     lastJpegBytes = jpeg.size
-    val url = settings.serverUrl.value + "/frame"
+    val url = frameUrl()
     val request =
         Request.Builder().url(url).post(jpeg.toRequestBody("image/jpeg".toMediaType())).build()
     val started = SystemClock.elapsedRealtime()
@@ -125,6 +152,7 @@ class FrameUploader(private val settings: Settings) {
         val card = json.optJSONObject("display")?.let(::parseCard)
         val people = json.optJSONArray("people")?.length() ?: 0
         Log.d(TAG, "frame ${jpeg.size} B -> ${latency} ms dropped=$dropped people=$people card=$card")
+        logRoundTrip(latency, jpeg.size)
         val now = SystemClock.elapsedRealtime()
         val fps =
             synchronized(sendTimes) {
@@ -153,6 +181,40 @@ class FrameUploader(private val settings: Settings) {
       fail("${e.javaClass.simpleName}: ${e.message}")
       Log.w(TAG, "POST $url failed", e)
     }
+  }
+
+  /**
+   * `<server>/frame` plus whatever the phone knows right now: lat/lng/acc once there's a GPS fix,
+   * steps if there's a pedometer. Missing values are left out rather than sent empty.
+   */
+  private fun frameUrl(): String {
+    val base = (settings.serverUrl.value + "/frame").toHttpUrlOrNull()
+        ?: return settings.serverUrl.value + "/frame"
+    return base.newBuilder().apply {
+      sensors.location?.let { fix ->
+        addQueryParameter("lat", "%.7f".format(Locale.US, fix.latitude))
+        addQueryParameter("lng", "%.7f".format(Locale.US, fix.longitude))
+        addQueryParameter("acc", "%.1f".format(Locale.US, fix.accuracy))
+      }
+      sensors.steps?.let { addQueryParameter("steps", it.toString()) }
+    }.build().toString()
+  }
+
+  /** Every [RTT_LOG_EVERY] uploads: round-trip min/avg/max, upload rate and average JPEG size. */
+  private fun logRoundTrip(latencyMs: Long, jpegBytes: Int) {
+    rtts += latencyMs
+    rttBytes += jpegBytes
+    if (rtts.size < RTT_LOG_EVERY) return
+    val now = SystemClock.elapsedRealtime()
+    val fps = if (rttWindowStart == 0L) 0.0 else RTT_LOG_EVERY * 1000.0 / (now - rttWindowStart)
+    Log.i(
+        TAG,
+        "Round trip (last %d): avg %d ms · min %d · max %d · %.1f uploads/s · %d KB avg"
+            .format(rtts.size, rtts.average().toLong(), rtts.min(), rtts.max(), fps, rttBytes / rtts.size / 1024),
+    )
+    rtts.clear()
+    rttBytes = 0L
+    rttWindowStart = now
   }
 
   private fun fail(message: String) {
@@ -219,9 +281,11 @@ class FrameUploader(private val settings: Settings) {
 
   companion object {
     private const val TAG = "Beacon/Upload"
-    /** 7 fps stream / 3 = ~2.3 fps to the server. */
-    const val SEND_EVERY_NTH = 3L
-    private const val JPEG_QUALITY = 80
+    /** Floor between upload starts, so a very fast server can't make the phone spin. */
+    private const val MIN_GAP_MS = 80L
+    private const val JPEG_QUALITY = 75
+    /** Uploads per round-trip summary in logcat. */
+    private const val RTT_LOG_EVERY = 20
     private const val SIZE_LOG_MS = 10_000L
   }
 }

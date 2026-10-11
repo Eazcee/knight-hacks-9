@@ -129,5 +129,22 @@ st = c.get("/state").json()
 check(st["frame_size"] and st["range"]["min_face_px"] == faces_mod.MIN_FACE_PX and st["last_scan"], f"state: frame {st['frame_size']}, range {st['range']}")
 check(c.get("/live.jpg").status_code == 200, "live view after scan")
 
+# 7. walk-by: a blurry stranger passing in 2 frames still gets enrolled (but not from one frame)
+c.post("/reset")
+def blurred(px, k):
+    img = cv2.imdecode(np.frombuffer(frame_with_faces(px, FW=1280, FH=1280), np.uint8), 1)
+    kern = np.zeros((k, k), np.float32); kern[k // 2, :] = 1.0 / k   # horizontal motion blur
+    return cv2.imencode(".jpg", cv2.filter2D(img, -1, kern), [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
+r1 = post("/frame", blurred(64, 9))
+q = sorted(f["quality"] for f in server.faces.detect(cv2.imdecode(np.frombuffer(blurred(64, 9), np.uint8), 1)))
+n1 = len(c.get("/people").json())
+r2 = post("/frame", blurred(66, 9))
+n2 = len(c.get("/people").json())
+check(n1 <= 2 and n2 >= 4, f"walk-by (motion blur, quality {q[0]:.2f}-{q[-1]:.2f}): {n1} enrolled after 1 frame, {n2} after 2")
+r3 = post("/frame", blurred(64, 9))
+check(len(c.get("/people").json()) == n2, "third blurry frame: recognized, no duplicates")
+st = c.get("/state").json()
+check(st["timing"]["device"] and st["timing"]["frame_ms"] > 0, f"timing: {st['timing']}")
+
 print(f"\n{'ALL PASSED' if not fails else str(fails) + ' FAILED'} in {time.time() - t0:.1f}s")
 sys.exit(1 if fails else 0)

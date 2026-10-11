@@ -51,11 +51,11 @@ group = idata.get_image("t1")
 scene = cv2.cvtColor(data.astronaut(), cv2.COLOR_RGB2BGR)
 t0 = time.time()
 
-# 1. no steps -> no place spam, even while "looking around"
+# 1. no GPS -> no places, even while "looking around"
 for i in range(8):
     frame(shifted(scene, 12 * i, -6 * i, 1 - 0.02 * i))
 m = c.get("/map").json()
-check(len(m["nodes"]) == 1, f"8 head-turn frames without step counts: {len(m['nodes'])} place (no spam)")
+check(len(m["nodes"]) == 0 and m["position"]["lat"] is None, "8 head-turn frames without GPS: no places, no position")
 
 # 2. people get photo URLs and training photos with quality scores
 r = frame(group)
@@ -143,8 +143,10 @@ c.post(f"/people/{pid}", json={"name": "Maya"})
 r = c.post("/command", json={"text": "train maya"}).json()
 check(r["ok"] and r["train"]["person_id"] == pid, f"voice: {r['say']}")
 c.post("/train/stop")
+check(c.post("/places/mark", json={"name": "x"}).status_code == 409, "can't mark a place without GPS")
+frame(scene, lat=28.6024, lng=-81.2001, acc=5)
 r = c.post("/places/mark", json={"name": "food court"}).json()
-check(r["name"] == "Food Court" and len(c.get("/map").json()["nodes"]) == 2, "marked a place by hand")
+check(r["name"] == "Food Court" and len(c.get("/map").json()["nodes"]) == 1, "marked a place by hand at the GPS position")
 c.post("/map/clear")
 check(len(c.get("/map").json()["nodes"]) == 0 and len(c.get("/people").json()) >= 4, "cleared map, kept people")
 html = c.get("/")

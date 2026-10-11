@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Beacon</title>
+<link rel="stylesheet" href="/static/leaflet/leaflet.css">
+<script src="/static/leaflet/leaflet.js"></script>
 <style>
 :root{
   --bg:#0e1013; --panel:#161a1f; --panel2:#1d2229; --line:#2a313a; --text:#e8ecf1; --muted:#8b95a3;
@@ -63,7 +65,38 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .tl{display:flex;gap:10px;align-items:center;padding:6px;border-radius:8px;cursor:pointer}
 .tl:hover{background:var(--panel2)}
 .tl img{width:40px;height:40px;border-radius:8px;object-fit:cover;background:#0b0d10;flex:none}
-#map{width:100%;height:320px;display:block;background:#0f1216;border-radius:10px}
+#map{width:100%;height:460px;display:block;background:#0f1216;border-radius:10px;position:relative;z-index:0}
+#mapMsg{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(14,16,19,.85);border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;z-index:400;pointer-events:none}
+.mapbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:12px;color:var(--muted)}
+.mapbar input[type=number]{width:58px;padding:3px 6px}
+.legend span{display:inline-flex;align-items:center;gap:4px;margin-right:10px}
+.legend i{width:12px;height:12px;border-radius:50%;border:3px solid #ef4444;display:inline-block}
+.legend i.g{border-color:#4cc38a}.legend i.w{border-color:#ef4444;background:#ef4444}.legend i.y{border:0;background:#3b82f6;width:12px;height:12px}
+.pinwrap{background:none;border:0}
+.node{width:10px;height:10px;border-radius:50%;background:#9fb3c8;border:1px solid #cbd5e1;box-shadow:0 0 3px #000;position:relative}
+.node.named{width:16px;height:16px;background:#3b82f6;border:2px solid #fff}
+.node .nl{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);white-space:nowrap;background:rgba(14,16,19,.9);color:#e8ecf1;border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:12px;pointer-events:none}
+.gpop{color:#1f2937;font:13px/1.4 system-ui,sans-serif;min-width:220px;max-width:300px}
+.gpop button{color:#1f2937;background:#f3f4f6;border-color:#d1d5db}.gpop button.primary{color:#06210f}
+.gpop textarea{color:#1f2937;background:#fff;border-color:#d1d5db;min-height:48px;margin-top:4px}
+.gpop .badge.watch{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+.pin{position:relative;width:46px;height:46px;border-radius:50%;border:4px solid #ef4444;overflow:hidden;background:#0b0d10;box-shadow:0 2px 8px rgba(0,0,0,.6);transition:transform .15s}
+.pin:hover{transform:scale(1.12)}
+.pin img{width:100%;height:100%;object-fit:cover;display:block}
+.pin.met{border-color:#4cc38a}
+.pin.watch{border-color:#ff2d2d;box-shadow:0 0 0 4px rgba(255,45,45,.35),0 2px 8px rgba(0,0,0,.6);animation:pulse 1.2s infinite}
+.pin.live::after{content:'';position:absolute;right:4px;bottom:4px;width:10px;height:10px;border-radius:50%;background:#4cc38a;border:2px solid #0b0d10}
+@keyframes pulse{0%{box-shadow:0 0 0 2px rgba(255,45,45,.5)}70%{box-shadow:0 0 0 12px rgba(255,45,45,0)}100%{box-shadow:0 0 0 2px rgba(255,45,45,0)}}
+.you{width:0;height:0;border-left:11px solid transparent;border-right:11px solid transparent;border-bottom:26px solid #3b82f6;filter:drop-shadow(0 0 4px #fff);transform-origin:50% 65%}
+.youwrap{background:none;border:0}
+.youdot{width:16px;height:16px;border-radius:50%;background:#3b82f6;border:3px solid #fff;box-shadow:0 0 6px #000}
+.leaflet-popup-content-wrapper{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px}
+.leaflet-popup-tip{background:var(--panel)}
+.leaflet-popup-content{margin:12px 14px;font:13px/1.4 system-ui,sans-serif;min-width:220px}
+.leaflet-popup-content textarea{min-height:48px;margin-top:4px}
+.leaflet-container a.leaflet-popup-close-button{color:var(--muted)}
+.leaflet-tooltip{background:rgba(14,16,19,.9);color:#e8ecf1;border:1px solid var(--line)}
+.card .ph .badge.tk{top:auto;bottom:6px;left:6px;background:#10361f;border-color:#1f5137;color:#9fe3bd}
 /* modal */
 .overlay{position:fixed;inset:0;background:rgba(5,7,9,.78);display:none;z-index:20;overflow:auto;padding:30px}
 .overlay.open{display:block}
@@ -137,12 +170,24 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
     </div>
 
     <div class="panel">
-      <h2>Map <span class="right">
-        <button onclick="markPlace()">Mark place here</button>
-        <button onclick="api('/route',{method:'DELETE'})">Cancel route</button>
+      <h2>Map <span class="muted" id="mapInfo" style="text-transform:none;letter-spacing:0;font-weight:400"></span><span class="right">
+        <button id="followBtn" onclick="toggleFollow()">Following</button>
+        <button onclick="markPlace()" title="Name the spot you're standing at">Mark place here</button>
+        <button onclick="api('/route',{method:'DELETE'}).then(()=>toast('Route cancelled'))">Cancel route</button>
         <button class="danger" onclick="clearMap()">Clear map</button></span></h2>
-      <canvas id="map"></canvas>
-      <small>Places appear from step counts, QR anchors (<code>place:Name</code>), or "Mark place here". Click a place to rename, route, or block a path.</small>
+      <div style="position:relative"><div id="map"></div><div id="mapMsg">Waiting for GPS from the phone…</div></div>
+      <div class="mapbar">
+        <span class="legend"><span><i></i> seen</span><span><i class="g"></i> talked</span><span><i class="w"></i> alert</span><span><i class="y"></i> you</span></span>
+        <span class="spacer"></span>
+        <label><input type="checkbox" id="convoOn" onchange="saveSettings()"> green after</label>
+        <input type="number" id="convoS" min="3" step="5" onchange="saveSettings()"> s in view
+        <span title="Click a pin for notes and Navigate. Click the map to navigate to a spot. Click a path to block it.">ⓘ</span>
+      </div>
+      <div class="mapbar"><span id="mapKind" class="muted"></span><span class="spacer"></span>
+        <label title="Paste a Google Maps JavaScript API key to switch the map to Google's satellite hybrid view. Leave empty for Esri imagery.">Google Maps key</label>
+        <input id="gkey" type="password" placeholder="AIza… (optional)" style="width:220px;padding:3px 6px" onkeydown="if(event.key==='Enter')saveKey()">
+        <button onclick="saveKey()">Use</button>
+      </div>
     </div>
   </div>
 
@@ -194,13 +239,14 @@ function renderChips(){
   <span class="chip"><b>${S.map.nodes.length}</b> places</span><span class="chip"><b>${inView}</b> in view</span>
   ${S.dropped?`<span class="chip"><b>${S.dropped}</b> dropped</span>`:''}
   ${S.frame_size?`<span class="chip" title="Resolution the server receives. Bigger = longer range.">frame <b>${S.frame_size[0]}×${S.frame_size[1]}</b></span>`:''}
+  ${S.timing&&S.timing.fps?`<span class="chip" title="Frames the server actually processes per second, and how long each takes (${esc(S.timing.device)}). Walk-by needs 5+ fps.">${esc(S.timing.device)} <b>${S.timing.fps}</b> fps · <b>${S.timing.frame_ms}</b> ms</span>`:''}
   ${S.far_unknown?`<span class="chip" title="Faces seen but too small or unclear to name">far <b>${S.far_unknown}</b></span>`:''}`;
 }
 function renderLive(){
   if(!S.has_live)return;
   const box=$('live');let img=box.querySelector('img');
   if(!img){box.innerHTML='<img alt="live camera">';img=box.querySelector('img')}
-  img.src='/live.jpg?'+Date.now();
+  if(!img._loop){img._loop=true;img.onload=img.onerror=()=>setTimeout(()=>{img.src='/live.jpg?'+Date.now()},120);img.src='/live.jpg?'+Date.now()}
   const lp=S.last_people.map(p=>(p.possible?'possible ':'')+(p.name||p.watch_label||p.person_id)+' '+Math.round(p.sim*100)+'% · '+p.px+'px'+(p.tier==='far'?' (far)':''));
   if(S.far_unknown)lp.push(S.far_unknown+' too far/unclear');
   $('liveInfo').textContent=lp.join(' · ');
@@ -224,11 +270,11 @@ function renderTrain(){
 }
 function renderPeople(){
   const inView=new Set(S.last_people.map(p=>p.person_id));
-  const key=JSON.stringify(S.people.map(p=>[p.id,p.name,p.photo,p.n_train,p.n_seen,p.last_place,p.is_watch,inView.has(p.id),p.last_seen_ago]));
+  const key=JSON.stringify(S.people.map(p=>[p.id,p.name,p.photo,p.n_train,p.n_seen,p.last_place,p.is_watch,inView.has(p.id),p.last_seen_ago,p.met]));
   if(key===lastPeopleKey)return;lastPeopleKey=key;
   $('peopleCount').textContent=S.people.length?`(${S.people.length})`:'';
   $('people').innerHTML=S.people.map(p=>`<div class="card" onclick="openPerson('${p.id}')">
-    <div class="ph" style="background-image:url('${p.photo||''}')">${p.is_watch?'<span class="badge watch badge">ALERT</span>':''}${inView.has(p.id)?'<span class="live-dot" title="in view now"></span>':''}</div>
+    <div class="ph" style="background-image:url('${p.photo||''}');box-shadow:inset 0 0 0 4px ${p.met?'#4cc38a':'#ef4444'}">${p.is_watch?'<span class="badge watch badge">ALERT</span>':''}${p.met?'<span class="badge tk">talked</span>':''}${inView.has(p.id)?'<span class="live-dot" title="in view now"></span>':''}</div>
     <div class="meta"><div class="nm">${esc(p.name||'Unknown')}</div>
     <div class="sub">${p.n_train||0} training · seen ${p.n_seen||0}×</div>
     <div class="sub">${esc(p.last_place||'—')} · ${esc(p.last_seen_ago||'')}</div></div></div>`).join('')||'<small>No one yet. Look at someone with the glasses on.</small>';
@@ -267,13 +313,15 @@ async function openPerson(pid){
     <div class="big" style="background-image:url('${p.photo||''}')" onclick="window._train.length?lbOpen(window._train,0):(window._sight.length&&lbOpen(window._sight,0))"></div>
     <div>
       <div class="row" style="margin-bottom:8px"><span class="badge">${esc(p.id)}</span>${p.is_watch?`<span class="badge watch">${esc(p.watch_label||'ALERT')}</span>`:''}
-        <small>last seen ${esc(p.last_place||'—')} · ${esc(p.last_seen_ago||'never')}</small></div>
+        ${p.met?'<span class="badge" style="background:#10361f;border-color:#1f5137;color:#9fe3bd">talked</span>':''}
+        <small>last seen ${esc(p.last_place||'—')} · ${esc(p.last_seen_ago||'never')}${p.lat?' · on map':''}</small></div>
       <div class="row" style="flex-wrap:nowrap;gap:12px"><div style="flex:1"><small>Name</small><input id="pName" value="${esc(p.name||'')}" placeholder="Who is this?"></div></div>
       <div style="margin-top:8px"><small>Notes</small><textarea id="pNotes" placeholder="What should the glasses show when you see them?">${esc(p.notes||'')}</textarea></div>
       <div class="row" style="margin-top:10px">
         <button class="primary" onclick="savePerson('${pid}')">Save</button>
         <button onclick="trainPerson('${pid}')" title="Look at them through the glasses while they turn their head">Train 20 s</button>
-        <button onclick="api('/route?to_person=${pid}').then(r=>toast(r.ok?'Route: '+r.cost_m+' m':'No route: '+r.reason)).catch(()=>{})">Route to last sighting</button>
+        <button onclick="navTo('${pid}')">Navigate to them</button>
+        <button onclick="api('/people/${pid}/met',{method:'POST',json:{met:${p.met?'false':'true'}}}).then(()=>{lastPeopleKey='';openPerson('${pid}')})">${p.met?'Talked ✓ (undo)':'Mark as talked'}</button>
         ${p.is_watch?`<button onclick="api('/watch/${pid}',{method:'DELETE'}).then(()=>openPerson('${pid}'))">Clear alert</button>`:`<button onclick="markAlert('${pid}')">Mark as alert</button>`}
         <select onchange="if(this.value){merge('${pid}',this.value)}" style="width:auto"><option value="">Merge into…</option>${others.map(o=>`<option value="${o.id}">${esc(label(o))}</option>`).join('')}</select>
         <button class="danger" onclick="delPerson('${pid}')">Delete person</button>
@@ -365,50 +413,174 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){closePerson();closeAlert()}
 });
 
-// ---------------- map
-const cv=$('map'),ctx=cv.getContext('2d');let MP=null;
-function fit(){const r=cv.getBoundingClientRect(),dpr=window.devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
-window.addEventListener('resize',()=>{fit();if(S)drawMap()});fit();
-function layout(){
-  const m=S.map,W=cv.clientWidth,H=cv.clientHeight,pad=40;let pts=m.nodes.map(n=>({id:n.id,x:n.x,y:n.y}));
-  const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
-  const spread=pts.length?Math.max(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys)):0;
-  if(pts.length>1&&spread<1.5){pts=pts.map((p,i)=>({id:p.id,x:Math.cos(i/pts.length*2*Math.PI)*5,y:Math.sin(i/pts.length*2*Math.PI)*5}))}
-  const all=pts.concat(spread<1.5?[]:[{x:m.position.x,y:m.position.y}]);
-  const minx=Math.min(...all.map(p=>p.x),0)-1,maxx=Math.max(...all.map(p=>p.x),0)+1,miny=Math.min(...all.map(p=>p.y),0)-1,maxy=Math.max(...all.map(p=>p.y),0)+1;
-  const sc=Math.min((W-2*pad)/(maxx-minx||1),(H-2*pad)/(maxy-miny||1));
-  const ox=(W-(maxx-minx)*sc)/2,oy=(H-(maxy-miny)*sc)/2;
-  const P=(x,y)=>[ox+(x-minx)*sc,H-(oy+(y-miny)*sc)];
-  const pos={};const taken=[];
-  pts.forEach(p=>{let [x,y]=P(p.x,p.y);let k=0;   // nudge places that sit on top of each other
-    while(taken.some(t=>Math.hypot(t[0]-x,t[1]-y)<16)&&k<12){k++;x+=Math.cos(k*2.4)*22;y+=Math.sin(k*2.4)*22}
-    taken.push([x,y]);pos[p.id]=[x,y]});
-  return {pos,P,fallback:spread<1.5};
+// ---------------- map: two renderers (Leaflet + Esri tiles by default; Google Maps when a key is saved)
+let follow=true,mapReady=false,centered=false,MR=null,gmapsTried=false,mapInitStarted=false;
+const PIN_HTML=(p,off)=>`<div class="pinoff" style="transform:translate(${off[0]}px,${off[1]}px)"><div class="pin ${p.met?'met':''} ${p.is_watch?'watch':''} ${p.in_view?'live':''}" title="${esc(p.name||'Unknown')}"><img src="${p.photo||''}" alt=""></div></div>`;
+const YOU_HTML=pos=>pos.heading!=null?`<div class="you" style="transform:rotate(${pos.heading}deg)"></div>`:'<div class="youdot"></div>';
+const NODE_HTML=n=>`<div class="node ${n.named?'named':''}" title="${esc(n.name)}">${n.named?`<span class="nl">${esc(n.name)}</span>`:''}</div>`;
+
+// --- Leaflet backend
+const LeafletMap={
+  layers:{},map:null,
+  init(onDrag,onClick){
+    if(!window.L)return false;
+    this.map=L.map('map',{zoomControl:true}).setView([28.6024,-81.2001],17);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:22,maxNativeZoom:19,attribution:'Tiles © Esri'}).addTo(this.map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:22,maxNativeZoom:19,opacity:.9}).addTo(this.map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:22,maxNativeZoom:19}).addTo(this.map);
+    this.map.on('dragstart',onDrag);this.map.on('click',e=>onClick(e.latlng.lat,e.latlng.lng));
+    return true;
+  },
+  setView(lat,lng,z){this.map.setView([lat,lng],z)},panTo(lat,lng){this.map.panTo([lat,lng],{animate:false})},
+  closePopup(){this.map.closePopup()},
+  popup(lat,lng,html,anchorLayer){L.popup({maxWidth:320}).setLatLng([lat,lng]).setContent(html).openOn(this.map)},
+  marker(id,lat,lng,o){
+    const w=o.w||46,h=o.h||46;let m=this.layers[id];
+    if(!m){m=L.marker([lat,lng],{icon:L.divIcon({className:'pinwrap',iconSize:[w,h],iconAnchor:[w/2,h/2],html:o.html}),zIndexOffset:o.z||0}).addTo(this.map);m._key=o.html;
+      m.on('click',ev=>{L.DomEvent.stop(ev);const oo=m._opts;if(oo.onClick)oo.onClick();else if(oo.popupHtml)L.popup({maxWidth:320,offset:[0,-(h/2)]}).setLatLng(m.getLatLng()).setContent(oo.popupHtml()).openOn(this.map)});
+      this.layers[id]=m}
+    else{m.setLatLng([lat,lng]);if(m._key!==o.html){m.setIcon(L.divIcon({className:'pinwrap',iconSize:[w,h],iconAnchor:[w/2,h/2],html:o.html}));m._key=o.html}m.setZIndexOffset(o.z||0)}
+    m._opts=o;
+  },
+  circle(id,lat,lng,r,o){let c=this.layers[id];const st={color:o.color,weight:o.weight||1,fillColor:o.color,fillOpacity:o.fill||.08,opacity:o.opacity||.8};
+    if(!c){c=L.circle([lat,lng],{radius:r,...st}).addTo(this.map);this.layers[id]=c}else{c.setLatLng([lat,lng]);c.setRadius(r);c.setStyle(st)}},
+  polyline(id,pts,o){let l=this.layers[id];const st={color:o.color,weight:o.weight||3,opacity:o.opacity||.9,dashArray:o.dash?(o.dash===true?'8 10':o.dash):null};
+    if(!l){l=L.polyline(pts,st).addTo(this.map);if(o.tooltip)l.bindTooltip(o.tooltip,{sticky:true});
+      l.on('click',ev=>{L.DomEvent.stop(ev);if(l._opts.onClick)l._opts.onClick()});this.layers[id]=l}
+    else{l.setLatLngs(pts);l.setStyle(st);if(o.tooltip){if(l.getTooltip())l.setTooltipContent(o.tooltip);else l.bindTooltip(o.tooltip,{sticky:true})}}
+    l._opts=o;
+  },
+  remove(id){const x=this.layers[id];if(x){x.remove();delete this.layers[id]}},
+};
+
+// --- Google Maps backend (satellite "hybrid" view). Needs a Maps JavaScript API key saved in the map bar.
+const GoogleMap={
+  layers:{},map:null,iw:null,
+  init(onDrag,onClick){
+    if(!(window.google&&google.maps&&google.maps.Map))return false;
+    this.map=new google.maps.Map($('map'),{center:{lat:28.6024,lng:-81.2001},zoom:17,mapTypeId:'hybrid',mapId:'DEMO_MAP_ID',
+      streetViewControl:false,fullscreenControl:false,mapTypeControl:true,rotateControl:false,tilt:0,gestureHandling:'greedy',
+      mapTypeControlOptions:{mapTypeIds:['hybrid','satellite','roadmap']}});
+    this.iw=new google.maps.InfoWindow();
+    this.map.addListener('dragstart',onDrag);
+    this.map.addListener('click',e=>onClick(e.latLng.lat(),e.latLng.lng()));
+    return true;
+  },
+  setView(lat,lng,z){this.map.setCenter({lat,lng});if(z)this.map.setZoom(z)},panTo(lat,lng){this.map.panTo({lat,lng})},
+  closePopup(){if(this.iw)this.iw.close()},
+  _content(html,w,h){const c=document.createElement('div');c.style.cssText=`width:${w}px;height:${h}px;transform:translateY(${h/2}px)`;c.innerHTML=html;return c},
+  popup(lat,lng,html,anchor){this.iw.close();const d=document.createElement('div');d.className='gpop';d.innerHTML=html;this.iw.setContent(d);
+    if(anchor){this.iw.setOptions({pixelOffset:new google.maps.Size(0,-((anchor._h||46)/2))});this.iw.open({map:this.map,anchor})}
+    else{this.iw.setOptions({pixelOffset:new google.maps.Size(0,0)});this.iw.setPosition({lat,lng});this.iw.open({map:this.map})}},
+  marker(id,lat,lng,o){
+    const w=o.w||46,h=o.h||46;let m=this.layers[id];
+    if(!m){m=new google.maps.marker.AdvancedMarkerElement({map:this.map,position:{lat,lng},content:this._content(o.html,w,h),zIndex:o.z||0,title:o.title||'',gmpClickable:true});
+      m._key=o.html;m._h=h;m.addListener('click',()=>{const oo=m._opts;if(oo.onClick)oo.onClick();else if(oo.popupHtml)this.popup(lat,lng,oo.popupHtml(),m)});this.layers[id]=m}
+    else{m.position={lat,lng};if(m._key!==o.html){m.content=this._content(o.html,w,h);m._key=o.html}m.zIndex=o.z||0}
+    m._opts=o;
+  },
+  circle(id,lat,lng,r,o){let c=this.layers[id];const st={strokeColor:o.color,strokeWeight:o.weight||1,strokeOpacity:o.opacity||.8,fillColor:o.color,fillOpacity:o.fill||.08,clickable:false};
+    if(!c){c=new google.maps.Circle({map:this.map,center:{lat,lng},radius:r,...st});this.layers[id]=c}else{c.setCenter({lat,lng});c.setRadius(r);c.setOptions(st)}},
+  polyline(id,pts,o){let l=this.layers[id];const path=pts.map(p=>({lat:p[0],lng:p[1]}));
+    const st={strokeColor:o.color,strokeWeight:o.weight||3,strokeOpacity:o.dash?0:(o.opacity||.9),zIndex:o.z||1,
+      icons:o.dash?[{icon:{path:'M 0,-1 0,1',strokeOpacity:o.opacity||.9,strokeColor:o.color,strokeWeight:o.weight||3,scale:1},offset:'0',repeat:'14px'}]:null};
+    if(!l){l=new google.maps.Polyline({map:this.map,path,...st});
+      l.addListener('click',()=>{if(l._opts.onClick)l._opts.onClick()});
+      l.addListener('mouseover',e=>{if(l._opts.tooltip){this.iw.close();this.iw.setOptions({pixelOffset:new google.maps.Size(0,-6)});this.iw.setContent('<small>'+l._opts.tooltip+'</small>');this.iw.setPosition(e.latLng);this.iw.open({map:this.map});this._tip=true}});
+      l.addListener('mouseout',()=>{if(this._tip){this.iw.close();this._tip=false}});
+      this.layers[id]=l}
+    else{l.setPath(path);l.setOptions(st)}
+    l._opts=o;
+  },
+  remove(id){const x=this.layers[id];if(x){if(x.setMap)x.setMap(null);else x.map=null;delete this.layers[id]}},
+};
+
+function initMap(){
+  const onDrag=()=>{follow=false;$('followBtn').textContent='Follow'};
+  const onClick=(lat,lng)=>{MR.popup(lat,lng,`<b>${lat.toFixed(5)}, ${lng.toFixed(5)}</b><div class="row" style="margin-top:8px"><button onclick="navToPoint(${lat},${lng})">Navigate here</button></div>`)};
+  MR=null;
+  if(window.google&&google.maps&&google.maps.Map&&GoogleMap.init(onDrag,onClick)){MR=GoogleMap;$('mapKind').textContent='Google Maps'}
+  else if(LeafletMap.init(onDrag,onClick)){MR=LeafletMap;$('mapKind').textContent='Esri imagery'}
+  if(!MR){$('mapMsg').textContent='Map library did not load';return}
+  mapReady=true;centered=false;
 }
+function loadGoogleMaps(key){
+  if(gmapsTried||!key)return;gmapsTried=true;
+  const fallback=msg=>{toast(msg,8000);if(MR===GoogleMap){GoogleMap.layers={}}$('map').innerHTML='';window.google=undefined;mapReady=false;initMap()};
+  window.gmapsReady=()=>{if(mapReady&&MR===LeafletMap){LeafletMap.map.remove();LeafletMap.layers={};$('map').innerHTML='';mapReady=false}initMap()};
+  window.gm_authFailure=()=>fallback('Google Maps rejected the key (it must be a Maps JavaScript API key on a project with the free trial / billing active). Using Esri imagery.');
+  const sc=document.createElement('script');sc.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&libraries=marker&loading=async&callback=gmapsReady`;
+  sc.onerror=()=>fallback('Could not load Google Maps (no internet?). Using Esri imagery.');
+  document.head.appendChild(sc);
+  setTimeout(()=>{if(!mapReady)fallback('Google Maps is taking too long. Using Esri imagery.')},12000);
+}
+function toggleFollow(){follow=!follow;$('followBtn').textContent=follow?'Following':'Follow';if(follow&&S&&S.map.position.lat&&MR)MR.panTo(S.map.position.lat,S.map.position.lng)}
+function fanOut(pins){
+  // people seen at the same spot would stack exactly on top of each other: spread them in a ring (pixels, so it works at any zoom)
+  const off={};const groups=[];
+  pins.forEach(p=>{let g=groups.find(g=>Math.hypot((g.lat-p.lat)*110540,(g.lng-p.lng)*111320*Math.cos(g.lat*Math.PI/180))<3);
+    if(g){g.items.push(p)}else{groups.push({lat:p.lat,lng:p.lng,items:[p]})}});
+  groups.forEach(g=>{const n=g.items.length;if(n===1){off[g.items[0].id]=[0,0];return}
+    const r=n<=6?30:30+(n-6)*4;g.items.forEach((p,i)=>{const a=-Math.PI/2+i*2*Math.PI/n;off[p.id]=[Math.round(r*Math.cos(a)),Math.round(r*Math.sin(a))]})});
+  return off;
+}
+function pinPopup(p){
+  return `<div style="display:flex;gap:10px;align-items:center"><img src="${p.photo||''}" style="width:54px;height:54px;border-radius:10px;object-fit:cover">
+   <div><b style="font-size:15px">${esc(p.name||'Unknown')}</b>${p.is_watch?' <span class="badge watch">ALERT</span>':''}<br>
+   <small>${p.met?'<span style="color:#4cc38a">talked</span>':'<span style="color:#ff8a8a">seen</span>'} · ${esc(p.last_seen_ago||'')}${p.in_view?' · in view':''}</small></div></div>
+   <textarea id="pn_${p.id}" placeholder="Note to remember them by…">${esc(p.notes||'')}</textarea>
+   <div class="row" style="margin-top:6px"><button class="primary" onclick="saveNote('${p.id}')">Save note</button>
+   <button onclick="navTo('${p.id}')">Navigate</button><button class="ghost" onclick="openPerson('${p.id}')">Open</button></div>`;
+}
+async function saveNote(pid){const t=$('pn_'+pid);if(!t)return;await api(`/people/${pid}`,{method:'POST',json:{notes:t.value}});toast('Note saved');lastPeopleKey=''}
+async function navTo(pid){try{const r=await api('/route?to_person='+pid);toast(r.ok?`Navigating: ${r.remaining_m} m ${r.mode==='compass'?'(direct, no walked path yet)':'along walked paths'}`:'No route: '+r.reason);MR&&MR.closePopup()}catch(e){}}
+async function navToPoint(lat,lng){try{const r=await api(`/route?lat=${lat}&lng=${lng}`);toast(r.ok?`Navigating: ${r.remaining_m} m`:'No route');MR&&MR.closePopup()}catch(e){}}
+function nodePopup(n){return `<b>${esc(n.name)}</b><br><small>${n.named?'named place':'auto place'} · ${n.visits||1} visit${(n.visits||1)!==1?'s':''}</small>
+  <div class="row" style="margin-top:8px"><button onclick="api('/route?to=${n.id}').then(r=>toast(r.ok?'Navigating: '+r.remaining_m+' m':'No route'));MR.closePopup()">Navigate</button>
+  <button onclick="renameNode(${n.id},'${esc(n.named?n.name:'')}')">Rename</button></div>`}
+async function renameNode(id,cur){const n=prompt('Name this place:',cur);if(n===null)return;await api('/nodes/'+id,{method:'POST',json:{name:n}});MR.closePopup();toast('Renamed')}
 function drawMap(){
-  const m=S.map,W=cv.clientWidth,H=cv.clientHeight;ctx.clearRect(0,0,W,H);
-  if(!m.nodes.length){ctx.fillStyle='#8b95a3';ctx.font='13px system-ui';ctx.fillText('No places yet. Walk with step counts on, scan a place: QR code, or press "Mark place here".',16,28);MP=null;return}
-  MP=layout();const {pos}=MP;
-  const onRoute=(a,b)=>m.route&&Math.abs(m.route.indexOf(a)-m.route.indexOf(b))===1&&m.route.includes(a)&&m.route.includes(b);
-  m.edges.forEach(e=>{if(e.a>e.b)return;const a=pos[e.a],b=pos[e.b];if(!a||!b)return;
-    ctx.lineWidth=onRoute(e.a,e.b)?4:2;ctx.strokeStyle=e.blocked?'#ef4444':onRoute(e.a,e.b)?'#4cc38a':'#3a4350';ctx.setLineDash(e.blocked?[6,6]:[]);
-    ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();ctx.setLineDash([]);
-    ctx.fillStyle='#6b7684';ctx.font='11px system-ui';ctx.fillText((e.dist*(1+e.crowd)).toFixed(0)+' m',(a[0]+b[0])/2+4,(a[1]+b[1])/2-4)});
-  m.nodes.forEach(n=>{const [x,y]=pos[n.id];const cur=n.id===m.current_node,goal=n.id===m.route_goal;
-    ctx.fillStyle=cur?'#4cc38a':goal?'#f5a524':'#3b82f6';ctx.beginPath();ctx.arc(x,y,cur?9:7,0,7);ctx.fill();
-    ctx.fillStyle='#e8ecf1';ctx.font='12px system-ui';ctx.fillText(n.name,x+12,y+4)});
+  if(!mapInitStarted){mapInitStarted=true;if(S.settings&&S.settings.google_maps_key)loadGoogleMaps(S.settings.google_maps_key);else initMap()}
+  if(document.activeElement!==$('convoS')){$('convoS').value=S.settings.convo_seconds;$('convoOn').checked=!!S.settings.convo_enabled}
+  if(document.activeElement!==$('gkey'))$('gkey').value=S.settings.google_maps_key||'';
+  if(!mapReady)return;
+  const m=S.map,pos=m.position;
+  if(pos.lat==null){$('mapMsg').style.display='block';$('mapMsg').textContent='Waiting for GPS from the phone…';}
+  else{$('mapMsg').style.display=pos.quality==='good'?'none':'block';$('mapMsg').textContent=pos.quality==='rough'?`GPS rough (±${Math.round(pos.acc)} m) — map building paused`:pos.quality==='dr'?'No good GPS: counting steps':'';}
+  $('mapInfo').textContent=pos.lat==null?'':`±${Math.round(pos.acc||0)} m · heading ${pos.heading!=null?Math.round(pos.heading)+'° ('+pos.heading_src+')':'unknown'} · ${m.nodes.length} places · ${m.pins.length} on map`;
+  const keep=new Set();
+  // you
+  if(pos.lat!=null){
+    MR.marker('you',pos.lat,pos.lng,{html:YOU_HTML(pos),w:26,h:26,z:1000});keep.add('you');
+    MR.circle('acc',pos.lat,pos.lng,pos.acc||10,{color:'#3b82f6',fill:.08,weight:1});keep.add('acc');
+    if(!centered){MR.setView(pos.lat,pos.lng,20);centered=true}else if(follow){MR.panTo(pos.lat,pos.lng)}
+  }
+  // trail
+  if(m.trail.length>1){MR.polyline('trail',m.trail,{color:'#ffffff',weight:2,opacity:.45,dash:'2 6',z:1});keep.add('trail')}
+  // edges (walked paths) with cost
+  const onRoute=(a,b)=>m.route&&m.route.path&&Math.abs(m.route.path.indexOf(a)-m.route.path.indexOf(b))===1&&m.route.path.includes(a)&&m.route.path.includes(b);
+  const N={};m.nodes.forEach(n=>N[n.id]=n);
+  m.edges.forEach(e=>{if(e.a>e.b)return;const a=N[e.a],b=N[e.b];if(!a||!b||a.lat==null||b.lat==null)return;const k='e'+e.a+'-'+e.b;keep.add(k);
+    MR.polyline(k,[[a.lat,a.lng],[b.lat,b.lng]],{color:e.blocked?'#ef4444':onRoute(e.a,e.b)?'#4cc38a':(e.crowd>0.5?'#f5a524':'#9fb3c8'),weight:onRoute(e.a,e.b)?6:4,opacity:e.blocked?.9:.75,dash:e.blocked?'6 8':null,z:2,
+      tooltip:`${Math.round(e.dist)} m${e.crowd>0.05?' · crowd ×'+(1+e.crowd).toFixed(1):''}${e.blocked?' · BLOCKED':''} · cost ${Math.round(e.dist*(1+e.crowd))} · click to ${e.blocked?'open':'block'}`,
+      onClick:async()=>{const bl=!e.blocked;await api(`/edges/${e.a}/${e.b}`,{method:'POST',json:{blocked:bl}});toast(bl?'Path blocked — rerouting if needed':'Path open again');tick()}})});
+  // places
+  m.nodes.forEach(n=>{if(n.lat==null)return;const k='n'+n.id;keep.add(k);
+    MR.marker(k,n.lat,n.lng,{html:NODE_HTML(n),w:n.named?16:10,h:n.named?16:10,z:n.named?300:50,title:n.name,popupHtml:()=>nodePopup(N[n.id]||n)})});
+  // route
+  if(m.route&&m.route.ok&&pos.lat!=null){const pts=[[pos.lat,pos.lng]].concat(m.route.waypoints.map(w=>[w.lat,w.lng]));
+    MR.polyline('route',pts,{color:'#4cc38a',weight:5,opacity:.95,dash:m.route.mode==='compass'?'8 10':null,z:5});keep.add('route')}
+  // people pins
+  const OFF=fanOut(m.pins);
+  m.pins.forEach(p=>{const k='p'+p.id;keep.add(k);
+    MR.marker(k,p.lat,p.lng,{html:PIN_HTML(p,OFF[p.id]),w:46,h:46,z:p.is_watch?900:(p.met?500:100),title:p.name||'',popupHtml:()=>pinPopup((S.map.pins.find(q=>q.id===p.id))||p)})});
+  Object.keys(MR.layers).forEach(k=>{if(!keep.has(k))MR.remove(k)});
+  if(!centered&&m.pins.length){MR.setView(m.pins[0].lat,m.pins[0].lng,20);centered=true}
 }
-cv.addEventListener('click',async e=>{
-  if(!MP||!S)return;const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;let best=null,bd=16;
-  S.map.nodes.forEach(n=>{const p=MP.pos[n.id];if(!p)return;const d=Math.hypot(p[0]-x,p[1]-y);if(d<bd){bd=d;best=n}});
-  if(!best)return;const a=prompt(`${best.name}: type a new name, "go" to route here, or "block <place number>"`,'go');if(!a)return;
-  if(a==='go'){const r2=await api('/route?to='+best.id);toast(r2.ok?'Route: '+r2.cost_m+' m':'No route')}
-  else if(a.startsWith('block ')){const other=S.map.nodes.find(n=>String(n.id)===a.slice(6).trim()||n.name.toLowerCase()===a.slice(6).trim().toLowerCase());
-    if(other)await api(`/edges/${best.id}/${other.id}`,{method:'POST',json:{blocked:true}})}
-  else await api('/nodes/'+best.id,{method:'POST',json:{name:a}});
-});
-async function markPlace(){const n=prompt('Name this place (optional):','');if(n===null)return;try{const r=await api('/places/mark',{method:'POST',json:{name:n}});toast('Marked '+r.name)}catch(e){}}
-async function clearMap(){if(!confirm('Forget all places? People and photos stay.'))return;await api('/map/clear',{method:'POST'});toast('Map cleared')}
+async function saveSettings(){await api('/settings',{method:'POST',json:{convo_seconds:+$('convoS').value||30,convo_enabled:$('convoOn').checked}});toast('Saved')}
+async function saveKey(){const k=$('gkey').value.trim();await api('/settings',{method:'POST',json:{google_maps_key:k}});toast(k?'Key saved, loading Google Maps…':'Key removed, using Esri imagery');setTimeout(()=>location.reload(),600)}
+async function markPlace(){const n=prompt('Name the place you are standing at:','');if(n===null)return;try{const r=await api('/places/mark',{method:'POST',json:{name:n}});toast('Marked '+r.name)}catch(e){}}
+async function clearMap(){if(!confirm('Forget all places and walked paths? People and photos stay.'))return;await api('/map/clear',{method:'POST'});toast('Map cleared')}
 async function deleteAll(){if(!confirm('Wipe EVERYTHING: people, photos, places?'))return;await api('/reset',{method:'POST'});lastPeopleKey='';lastTlKey='';toast('Everything deleted')}
 </script>
 </body>

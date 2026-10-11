@@ -3,6 +3,7 @@
   python webcam_client.py                      # laptop webcam
   python webcam_client.py --video walk.mp4     # replay a video recorded on the Ray-Bans
   python webcam_client.py --server http://192.168.1.20:8000 --fps 3 --show
+  python webcam_client.py --lat 28.6024 --lng -81.2001   # fake GPS so faces get pins on the map
 
 Replaying a video you recorded with the glasses' normal capture is the fastest
 way to build a map of the venue before the live SDK path works.
@@ -18,8 +19,10 @@ ap.add_argument("--server", default="http://127.0.0.1:8000")
 ap.add_argument("--video", default=None, help="video file instead of webcam")
 ap.add_argument("--cam", type=int, default=0)
 ap.add_argument("--fps", type=float, default=2.0, help="frames per second to send")
-ap.add_argument("--width", type=int, default=640)
 ap.add_argument("--show", action="store_true", help="draw boxes in a window")
+ap.add_argument("--lat", type=float, default=None, help="fake GPS position so people land on the map")
+ap.add_argument("--lng", type=float, default=None)
+ap.add_argument("--width", type=int, default=0, help="downscale before sending (0 = send as is)")
 args = ap.parse_args()
 
 cap = cv2.VideoCapture(args.video if args.video else args.cam)
@@ -44,10 +47,11 @@ while True:
         continue
     last_send = time.time()
     h, w = frame.shape[:2]
-    small = cv2.resize(frame, (args.width, int(h * args.width / w)))
+    small = cv2.resize(frame, (args.width, int(h * args.width / w))) if args.width and w > args.width else frame
     ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    params = {"lat": args.lat, "lng": args.lng, "acc": 5} if args.lat is not None else {}
     try:
-        r = requests.post(f"{args.server}/frame", data=jpg.tobytes(),
+        r = requests.post(f"{args.server}/frame", data=jpg.tobytes(), params=params,
                           headers={"Content-Type": "image/jpeg"}, timeout=10).json()
     except Exception as e:
         print("server error:", e)

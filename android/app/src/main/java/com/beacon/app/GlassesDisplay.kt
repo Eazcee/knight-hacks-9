@@ -206,13 +206,28 @@ class GlassesDisplay(private val scope: CoroutineScope) {
         // Notes can hold line breaks ("- beard\n-cs"); on the glasses each would become an extra
         // row past the 3-line budget, so they're folded into one line.
         val flat = line.replace(Regex("\\s*\\n+\\s*"), " · ")
-        text(flat, style = TextStyle.BODY, color = if (card.isAlert) TextColor.PRIMARY else TextColor.SECONDARY)
+        text(fitLine(flat), style = TextStyle.BODY, color = if (card.isAlert) TextColor.PRIMARY else TextColor.SECONDARY)
       }
     }
   }
 
+  /**
+   * Keeps a body line to one row on the 600x600 display. Server lines are "a · b · c" with the
+   * most important part first ("LEFT · 24 m · direct", "120 m left · 2 min · 3 turns"), so trailing
+   * parts are dropped before anything is cut mid-word.
+   */
+  private fun fitLine(line: String): String {
+    if (line.length <= MAX_LINE_CHARS) return line
+    val parts = line.split(" · ").toMutableList()
+    while (parts.size > 1 && parts.joinToString(" · ").length > MAX_LINE_CHARS) parts.removeAt(parts.lastIndex)
+    val kept = parts.joinToString(" · ")
+    return if (kept.length <= MAX_LINE_CHARS) kept else kept.take(MAX_LINE_CHARS - 1).trimEnd() + "…"
+  }
+
   companion object {
     private const val TAG = "Beacon/Display"
+    /** Body characters that fit one row on the glasses (estimate; tune after seeing it worn). */
+    private const val MAX_LINE_CHARS = 30
     private const val MAX_LINES = 3
     private const val HOLD_MS = 3_000L
     private const val REFRESH_MS = 2_000L

@@ -2,11 +2,13 @@ package com.beacon.app
 
 import android.app.Activity
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.meta.wearable.dat.camera.Camera
 import com.meta.wearable.dat.camera.addCamera
 import com.meta.wearable.dat.camera.removeCamera
 import com.meta.wearable.dat.camera.types.StreamConfiguration
+import com.meta.wearable.dat.camera.types.StreamError
 import com.meta.wearable.dat.camera.types.StreamState
 import com.meta.wearable.dat.camera.types.VideoQuality
 import com.meta.wearable.dat.core.Wearables
@@ -41,13 +43,29 @@ data class GlassesDevice(
     val hinge: String,
     val worn: String,
     val battery: Int,
+    /** When the link last became CONNECTED (elapsedRealtime), or 0 while not connected. */
+    val connectedAt: Long = 0L,
 ) {
   /**
    * Connected, unfolded and on someone's head: only then does a session actually start. Folded or
    * not worn, the glasses end every session within ~100 ms ("Session ended by device").
    */
   val isReady: Boolean
-    get() = link == LinkState.CONNECTED && hinge != "closed" && worn != "doffed"
+    get() =
+        link == LinkState.CONNECTED &&
+            hinge != "closed" && worn != "doffed" &&
+            // Right after a reconnect both read "unknown" until something changes. Waiting a
+            // moment avoids sessions on folded glasses dying every 3 s; waiting forever stranded
+            // glasses that were already open and worn (they never send a change).
+            ((hinge != "unknown" && worn != "unknown") || unknownGraceOver)
+
+  /** Connected long enough that a still-"unknown" hinge/worn means "no change to report". */
+  val unknownGraceOver: Boolean
+    get() = connectedAt > 0 && SystemClock.elapsedRealtime() - connectedAt >= UNKNOWN_GRACE_MS
+
+  companion object {
+    const val UNKNOWN_GRACE_MS = 4_000L
+  }
 }
 
 data class GlassesStatus(
@@ -75,7 +93,11 @@ data class GlassesStatus(
  * glasses off) is waited out; a terminal STOPPED session is recreated after a short delay while
  * [GlassesStatus.wantStreaming] is on, since a stopped session cannot be restarted.
  */
-class GlassesLink(private val context: Context, private val uploader: FrameUploader) {
+class GlassesLink(
+    private val context: Context,
+    private val uploader: FrameUploader,
+    private val sensors: PhoneSensors,
+) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   // Frames are handled off the main thread, one at a time, in order.
   private val frameDispatcher = Dispatchers.Default.limitedParallelism(1)
@@ -92,6 +114,13 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
   private var sessionStarted = false
   /** Pending "glasses have been off long enough" timer. */
   private var offJob: Job? = null
+  /** Recent camera re-adds, to cap them at [MAX_REATTACHES] per [REATTACH_WINDOW_MS]. */
+  private val reattachTimes = ArrayDeque<Long>()
+  private var reattachJob: Job? = null
+  /** Consecutive sessions that ended before reaching STARTED, for the reconnect backoff. */
+  private var failedAttempts = 0
+  /** Set when the glasses refused the camera: the next Start goes straight to Meta AI. */
+  private var askForCameraNextStart = false
 
   /** The glasses display: renders each card the server returns. */
   val display = GlassesDisplay(scope)
@@ -141,6 +170,13 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
       deviceJobs[id] =
           scope.launch {
             flow.collect { d ->
+              val previous = _status.value.devices[id]
+              val connectedAt =
+                  when {
+                    d.linkState != LinkState.CONNECTED -> 0L
+                    previous != null && previous.connectedAt > 0 -> previous.connectedAt
+                    else -> SystemClock.elapsedRealtime()
+                  }
               val info =
                   GlassesDevice(
                       name = d.name.ifEmpty { id.toString() },
@@ -149,8 +185,8 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
                       hinge = d.hingeState.name.lowercase(),
                       worn = d.donState.name.lowercase(),
                       battery = d.batteryLevel,
+                      connectedAt = connectedAt,
                   )
-              val previous = _status.value.devices[id]
               if (info != previous) Log.i(TAG, "Device $info")
               _status.update { s -> s.copy(devices = s.devices + (id to info)) }
               // With the display attached, taking the glasses off no longer pauses the session,
@@ -212,15 +248,38 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
       return
     }
     _status.update { it.copy(wantStreaming = true, message = null) }
+    failedAttempts = 0
     StreamingService.start(context)
+    sensors.start() // GPS + steps ride along with every frame while streaming
     scope.launch {
       var granted = false
+      if (askForCameraNextStart) {
+        askForCameraNextStart = false
+        granted = requestPermission(Permission.CAMERA) == PermissionStatus.Granted
+        Log.i(TAG, "Camera permission (asked after the glasses refused): $granted")
+        if (!granted) {
+          note("Camera permission denied in Meta AI")
+          stop()
+          return@launch
+        }
+        openSession()
+        return@launch
+      }
       Wearables.checkPermissionStatus(Permission.CAMERA)
           .onSuccess {
             Log.i(TAG, "Camera permission: $it")
             granted = it == PermissionStatus.Granted
           }
           .onFailure { error, _ -> note("Camera permission check failed: ${error.description}") }
+      if (!granted) {
+        // Checked right after the glasses reconnect, this reads Denied for a grant that
+        // still stands; look again before sending the wearer into the Meta AI flow.
+        delay(PERMISSION_RECHECK_MS)
+        Wearables.checkPermissionStatus(Permission.CAMERA).onSuccess {
+          Log.i(TAG, "Camera permission (recheck): $it")
+          granted = it == PermissionStatus.Granted
+        }
+      }
       if (!granted) granted = requestPermission(Permission.CAMERA) == PermissionStatus.Granted
       if (!granted) {
         note("Camera permission denied in Meta AI")
@@ -234,7 +293,9 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
   fun stop() {
     _status.update { it.copy(wantStreaming = false) }
     retryJob?.cancel()
+    reattachJob?.cancel()
     StreamingService.stop(context)
+    sensors.stop()
     val current = session
     if (current == null) {
       _status.update { it.copy(session = null, stream = null) }
@@ -254,9 +315,21 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
           when {
             d.link != LinkState.CONNECTED -> "Waiting for glasses to connect (${d.link.name.lowercase()})"
             d.hinge == "closed" -> "Open the glasses hinges to start"
+            d.hinge == "unknown" || d.worn == "unknown" -> "Waiting for the glasses to report in…"
             else -> "Put the glasses on to start"
           }
       )
+      // No reading may ever come for glasses that are already open and worn, so look again once
+      // the grace period is over instead of waiting on a metadata change.
+      if (d.link == LinkState.CONNECTED && (d.hinge == "unknown" || d.worn == "unknown")) {
+        val left = GlassesDevice.UNKNOWN_GRACE_MS - (SystemClock.elapsedRealtime() - d.connectedAt)
+        retryJob?.cancel()
+        retryJob =
+            scope.launch {
+              delay(left.coerceAtLeast(0L) + 100L)
+              if (_status.value.wantStreaming && session == null) openSession()
+            }
+      }
       return
     }
     Wearables.createSession(AutoDeviceSelector())
@@ -287,6 +360,7 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
     _status.update { it.copy(session = state) }
     when (state) {
       DeviceSessionState.STARTED -> {
+        failedAttempts = 0
         // Errors from failed attempts before this session are no longer true.
         _status.update { it.copy(message = null) }
         uploader.clearError()
@@ -325,7 +399,12 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
                 stream.videoStream.collect { frame ->
                   if (frame.isCompressed) return@collect
                   val size = "${frame.width}x${frame.height}"
-                  if (_status.value.frameSize != size) _status.update { it.copy(frameSize = size) }
+                  val was = _status.value.frameSize
+                  if (was != size) {
+                    // Every resolution change, so Bluetooth step-downs can be counted exactly.
+                    Log.i(TAG, "Stream size ${was ?: "-"} -> $size")
+                    _status.update { it.copy(frameSize = size) }
+                  }
                   uploader.offer(frame.buffer, frame.width, frame.height)
                 }
               }
@@ -336,7 +415,9 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
                   Log.i(TAG, "Stream $state")
                   _status.update { it.copy(stream = state) }
                   val terminal = state == StreamState.STOPPED || state == StreamState.CLOSED
-                  if (!terminal) wasActive = true
+                  // Only a stream that really ran counts as lost; one that fails while starting
+                  // (e.g. the glasses refuse the camera) must not trigger a re-add.
+                  if (state == StreamState.STREAMING) wasActive = true
                   else if (wasActive) onStreamLost(s)
                 }
               }
@@ -344,7 +425,15 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
               scope.launch {
                 stream.errorStream.collect { error ->
                   Log.w(TAG, "Stream error: ${error.description}")
-                  note("Stream: ${error.description}")
+                  if (error == StreamError.PERMISSIONS_DENIED) {
+                    // The glasses refuse the camera even when the phone-side check says Granted
+                    // (an expired "allow once"). Retrying can't fix that; Meta AI has to approve it.
+                    askForCameraNextStart = true
+                    stop()
+                    note("The glasses refused the camera. Tap Start streaming to approve it in Meta AI.")
+                  } else {
+                    note("Stream: ${error.description}")
+                  }
                 }
               }
           stream.start().onFailure { error, _ -> note("Stream start failed: ${error.description}") }
@@ -379,11 +468,29 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
     if (camera != null || !_status.value.wantStreaming) return
     if (_status.value.session != DeviceSessionState.STARTED) return
     if (_status.value.devices.values.none { it?.isReady == true }) return
-    Log.i(TAG, "Re-adding camera to the live session")
-    addCamera(s)
+    val now = SystemClock.elapsedRealtime()
+    reattachTimes.removeAll { now - it > REATTACH_WINDOW_MS }
+    if (reattachTimes.size >= MAX_REATTACHES) {
+      Log.w(TAG, "Camera failed ${reattachTimes.size}x in a minute: giving up")
+      stop()
+      note("The camera keeps failing on the glasses. Tap Start streaming to try again.")
+      return
+    }
+    reattachTimes += now
+    Log.i(TAG, "Re-adding camera to the live session in ${REATTACH_DELAY_MS} ms")
+    reattachJob?.cancel()
+    reattachJob =
+        scope.launch {
+          delay(REATTACH_DELAY_MS)
+          // Re-check readiness: a fold often reports a moment after the stream ends. If the glasses
+          // aren't ready, the "just became ready" path in trackDevices re-adds the camera later.
+          val ready = _status.value.devices.values.any { it?.isReady == true }
+          if (session === s && camera == null && _status.value.wantStreaming && ready) addCamera(s)
+        }
   }
 
   private fun teardownSession() {
+    reattachJob?.cancel()
     cameraJobs.forEach { it.cancel() }
     cameraJobs.clear()
     sessionJobs.forEach { it.cancel() }
@@ -395,11 +502,15 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
     _status.update { it.copy(stream = null, frameSize = null) }
   }
 
+  /** Reconnects after 3 s, doubling per consecutive failure up to 30 s; a STARTED session resets it. */
   private fun scheduleRetry() {
+    val wait = (RETRY_DELAY_MS shl failedAttempts.coerceAtMost(4)).coerceAtMost(MAX_RETRY_DELAY_MS)
+    failedAttempts++
+    if (failedAttempts > 1) Log.i(TAG, "Reconnect attempt $failedAttempts in ${wait / 1000} s")
     retryJob?.cancel()
     retryJob =
         scope.launch {
-          delay(RETRY_DELAY_MS)
+          delay(wait)
           if (_status.value.wantStreaming && session == null) openSession()
         }
   }
@@ -410,8 +521,14 @@ class GlassesLink(private val context: Context, private val uploader: FrameUploa
 
   companion object {
     private const val TAG = "Beacon/Glasses"
-    private const val FRAME_RATE = 7
+    /** Valid SDK rates: 2, 7, 15, 24, 30. 15 = more frames of people walking by (trial). */
+    private const val FRAME_RATE = 15
     private const val RETRY_DELAY_MS = 3_000L
+    private const val MAX_RETRY_DELAY_MS = 30_000L
     private const val OFF_GRACE_MS = 5_000L
+    private const val REATTACH_DELAY_MS = 2_000L
+    private const val REATTACH_WINDOW_MS = 60_000L
+    private const val MAX_REATTACHES = 3
+    private const val PERMISSION_RECHECK_MS = 2_000L
   }
 }

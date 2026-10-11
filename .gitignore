@@ -1,6 +1,7 @@
 # Face data, crops and frames of real people: never commit.
 server/data/
 server/data_test*/
+server/data_fast/
 # Python
 server/.venv/
 __pycache__/

@@ -2,6 +2,7 @@
 server/data/
 server/data_test*/
 server/data_fast/
+server/data_auraface/
 # Python
 server/.venv/
 __pycache__/

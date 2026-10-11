@@ -13,8 +13,9 @@ How the "categories" work:
     with their best, most varied angles.
   * Mistakes are fixed by people, not code: merge two people, remove a bad photo.
 
-Uses InsightFace (buffalo_l). On first run it downloads ~280 MB of models to
-~/.insightface/models.
+Uses the Apache-2.0 AuraFace v1 model from Hugging Face through InsightFace.
+On first run, Hugging Face Hub downloads the detector and recognizer to
+~/.insightface/models/auraface.
 """
 import os
 import threading
@@ -72,9 +73,34 @@ def _providers():
     return ["CPUExecutionProvider"], -1
 
 
-MODEL = os.environ.get("BEACON_MODEL", "buffalo_l")   # buffalo_s = ~4x faster on CPU, a bit less accurate
+MODEL = os.environ.get("BEACON_MODEL", "auraface")
+MODEL_ROOT = os.path.expanduser(os.environ.get("BEACON_MODEL_ROOT", "~/.insightface"))
+HF_MODEL_REPOS = {"auraface": "fal/AuraFace-v1"}
 DET_SIZE = int(os.environ.get("BEACON_DET", 640))                  # detector input, long side. smaller = faster, shorter range
 SCAN_TILE = int(os.environ.get("BEACON_SCAN_TILE", 1600))          # /scan: big photos are searched in tiles this size
+
+
+def _ensure_model():
+    """Download Hugging Face model files once, into InsightFace's model layout."""
+    repo = HF_MODEL_REPOS.get(MODEL)
+    if not repo:
+        return
+    model_dir = os.path.join(MODEL_ROOT, "models", MODEL)
+    required = ("scrfd_10g_bnkps.onnx", "glintr100.onnx")
+    if all(os.path.exists(os.path.join(model_dir, name)) for name in required):
+        return
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "AuraFace requires huggingface_hub. Install server/requirements.txt first."
+        ) from exc
+    print(f"Downloading {repo} from Hugging Face to {model_dir}")
+    snapshot_download(
+        repo_id=repo,
+        local_dir=model_dir,
+        allow_patterns=[*required, "README.md", "LICENSE.md"],
+    )
 
 
 def _iou(a, b):
@@ -110,8 +136,6 @@ def face_quality(img, box, kps, det):
 
 class FaceEngine:
     def __init__(self, db, crops_dir="data/crops", auto_enroll=True, media=None):
-        from insightface.app import FaceAnalysis  # imported here so the server starts fast
-
         self.db = db
         self.media = media
         self.crops_dir = crops_dir
@@ -120,7 +144,10 @@ class FaceEngine:
         self.lock = threading.Lock()
         if hasattr(db, "ensure_model"):
             db.ensure_model(MODEL)
-        # embeddings from different models can't be compared: don't mix them in one database
+        _ensure_model()
+        from insightface.app import FaceAnalysis  # imported here so the server starts fast
+
+        # Embeddings from different models cannot be compared; do not mix them in one database.
         mpath = os.path.join(os.path.dirname(crops_dir) or ".", "model.txt")
         saved = open(mpath).read().strip() if os.path.exists(mpath) else None
         if saved and saved != MODEL and len(db.embeddings()[0]):
@@ -131,13 +158,22 @@ class FaceEngine:
         providers, ctx = _providers()
         self.device = "GPU (" + providers[0].replace("ExecutionProvider", "") + ")" if ctx >= 0 else "CPU"
         try:
-            self.app = FaceAnalysis(name=MODEL, providers=providers, allowed_modules=["detection", "recognition"])
+            self.app = FaceAnalysis(
+                name=MODEL,
+                root=MODEL_ROOT,
+                providers=providers,
+                allowed_modules=["detection", "recognition"],
+            )
             self.app.prepare(ctx_id=ctx, det_size=(DET_SIZE, DET_SIZE))
         except Exception as e:   # GPU provider present but broken: fall back to CPU
             print("GPU init failed, using CPU:", e)
             self.device = "CPU"
-            self.app = FaceAnalysis(name=MODEL, providers=["CPUExecutionProvider"],
-                                    allowed_modules=["detection", "recognition"])
+            self.app = FaceAnalysis(
+                name=MODEL,
+                root=MODEL_ROOT,
+                providers=["CPUExecutionProvider"],
+                allowed_modules=["detection", "recognition"],
+            )
             self.app.prepare(ctx_id=-1, det_size=(DET_SIZE, DET_SIZE))
         self.device += f" · {MODEL}"
         print("Beacon face engine on", self.device)

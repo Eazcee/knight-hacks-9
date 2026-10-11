@@ -3,7 +3,7 @@
 **One line:** the glasses remember every face you pass and where you were when you passed it; when an alert comes in, they tell you if you've already seen that person, and walk you back there over the paths you actually walked.
 
 Two engines, one record:
-- **Faces** (InsightFace/ArcFace): detect → embed → match against everyone seen so far. Strangers get an anonymous id automatically, so the *next* sighting recognizes them. Add names and notes by voice. Load an alert photo → "seen before: Coffee Station, 12 min ago".
+- **Faces** ([AuraFace v1](https://huggingface.co/fal/AuraFace-v1), run through InsightFace): detect → embed → match against everyone seen so far. Strangers get an anonymous id automatically, so the *next* sighting recognizes them. Add names and notes by voice. Load an alert photo → "seen before: Coffee Station, 12 min ago".
 - **Map** (GPS + self-building walk graph + A*): the phone's GPS comes with every frame. Everyone you see gets a **pin** with their clearest photo at the spot you saw them: **red** = seen, **green** = you talked (in view for 30 s, setting). A place is created every ~8 m you walk; edges carry **cost = distance walked × (1 + crowd)** and can be **blocked** (tap, voice "blocked", QR sign). Routes are A* over that; off the walked map it's **compass mode** (bearing + distance). The glasses show turn-by-turn, and the route ends the moment the camera recognizes the person you're walking to.
 
 The bridge: every sighting is stored with its map position. "Where did I see her" and "take me there" are the same row in the database.
@@ -47,14 +47,15 @@ uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 The server requires the Neon `DATABASE_URL` and `DATABASE_URL_UNPOOLED` values
 in the repository-root `.env.local`; see [`../NEON.md`](../NEON.md).
-First start downloads the face models (~280 MB, from GitHub). Then open **http://localhost:8000** for the dashboard.
+First start downloads the Apache-2.0 AuraFace v1 detector and recognizer from Hugging Face into `~/.insightface/models/auraface`. Then open **http://localhost:8000** for the dashboard.
 
 The end-to-end scripts reset their database. Run them only with a disposable
-Neon branch supplied as `BEACON_TEST_DATABASE_URL`, never production:
+Neon branch and its matching private object-storage credentials, never production:
 ```bash
 BEACON_TEST_DATABASE_URL='postgresql://...' python test_demo.py
 BEACON_TEST_DATABASE_URL='postgresql://...' python test_training.py
 BEACON_TEST_DATABASE_URL='postgresql://...' python test_range.py
+BEACON_TEST_DATABASE_URL='postgresql://...' python test_auraface_server.py
 python sim_walk.py --reset   # fake GPS walk: watch the map build, pins appear, a route draw and reroute
 python webcam_client.py --show --lat 28.6024 --lng -81.2001   # laptop webcam → server, faces get pins
 ```
@@ -90,7 +91,7 @@ Speed: ~1.3 s/frame on a weak 2-core box; expect 150–400 ms on a laptop. Send 
 
 Printed QR codes are optional: text `place:Coffee Station` names the place you're at; text `blocked` held up while following a route blocks the stretch ahead and reroutes (same as saying "blocked"). Make them with any QR generator, print big (≥ 15 cm).
 
-Env flags: `BEACON_MODEL=buffalo_l` (`buffalo_s` = ~8x faster on CPU, same close-range accuracy, shorter far range; needs its own data folder, e.g. `BEACON_DATA=data_fast`), `BEACON_PROVIDERS=cpu` (force CPU), `BEACON_NODE_M=8` (place spacing), `BEACON_GOOD_ACC=15` (GPS accuracy trusted to build the map), `BEACON_DET=640` (detector size, long side; 416 = faster, shorter range), `BEACON_MIN_FACE=18` / `BEACON_NEAR_PX=40` / `BEACON_ENROLL_PX=56` / `BEACON_FAR_MATCH=0.40` (range tiers, above), `BEACON_SCAN_TILE=1600`, `BEACON_MATCH=0.45` (match threshold), `BEACON_AUTO_ENROLL=0` (only recognize enrolled people), `BEACON_RETENTION_H=24` (forget un-annotated strangers after N hours).
+Env flags: `BEACON_MODEL=auraface` (default, downloaded from `fal/AuraFace-v1` on Hugging Face), `BEACON_MODEL=buffalo_l BEACON_DATA=data` (use the previous model and its existing fingerprints), `BEACON_MODEL=buffalo_s BEACON_DATA=data_fast` (faster on CPU, shorter far range), `BEACON_PROVIDERS=cpu` (force CPU), `BEACON_NODE_M=8` (place spacing), `BEACON_GOOD_ACC=15` (GPS accuracy trusted to build the map), `BEACON_DET=640` (detector size, long side; 416 = faster, shorter range), `BEACON_MIN_FACE=18` / `BEACON_NEAR_PX=40` / `BEACON_ENROLL_PX=56` / `BEACON_FAR_MATCH=0.40` (range tiers, above), `BEACON_SCAN_TILE=1600`, `BEACON_MATCH=0.45` (match threshold), `BEACON_AUTO_ENROLL=0` (only recognize enrolled people), `BEACON_RETENTION_H=24` (forget un-annotated strangers after N hours).
 
 ## 3. Glasses side (the part only you can test)
 

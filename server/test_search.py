@@ -52,8 +52,8 @@ for i in range(60):
 calls = []
 
 
-def fake_nearby(lat, lng, radius, n=20):
-    calls.append(radius)
+def fake_nearby(lat, lng, radius, n=20, types=None):
+    calls.append((radius, bool(types)))
     hits = sorted((b for b in FAKE if server.haversine_m(lat, lng, b["lat"], b["lng"]) <= radius),
                   key=lambda b: server.haversine_m(lat, lng, b["lat"], b["lng"]))
     return [dict(b) for b in hits[:n]]
@@ -95,9 +95,16 @@ R = 1609.34 / 16.5 * 10
 inside = [b for b in FAKE if server.haversine_m(z["lat"], z["lng"], b["lat"], b["lng"]) <= R]
 check(z["radius_m"] == round(R), f"search circle: {z['radius_m']} m for 10 min on foot (16.5 min/mile)")
 check(z["n"] == len(inside) and z["n"] > 5, f"every building inside the circle: {z['n']} (truth {len(inside)}) in {len(calls)} lookups")
+check(all(t for _, t in calls), "asks Google for main buildings only (named building types)")
 d = [b["dist"] for b in z["buildings"]]
-rings = [x // 150 for x in d]
-check(rings == sorted(rings), "search order goes outward from where she was last seen (150 m rings)")
+half = len(d) // 2
+check(sum(d[:half]) / max(1, half) < sum(d[half:]) / max(1, len(d) - half), "search order starts near where she was last seen and works outward")
+walk = sum(server.haversine_m(a["lat"], a["lng"], b["lat"], b["lng"]) for a, b in zip(z["buildings"], z["buildings"][1:]))
+rings = sorted(z["buildings"], key=lambda b: b["dist"])
+walk_rings = sum(server.haversine_m(a["lat"], a["lng"], b["lat"], b["lng"]) for a, b in zip(rings, rings[1:]))
+check(walk < walk_rings, f"route is shorter than plain nearest-to-last-seen order ({walk:.0f} m vs {walk_rings:.0f} m)")
+pp = [q for q in c.get("/people").json() if q["id"] == pid][0]
+check("last_seen_place" in pp and pp["last_seen_ago"], f"card: last seen {pp['last_seen_ago']} · {pp['last_seen_place']}")
 check(z["target"] and z["target"]["id"] == z["buildings"][0]["id"] or z["target"]["dist"] < 150, f"first target: {z['target']['name']} ({z['target']['dist']} m)")
 r = frame(scene, 0, 0, heading=0)
 check(r["display"]["title"] == "→ " + z["target"]["name"] and any("search 0/" in l for l in r["display"]["lines"]),

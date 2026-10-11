@@ -361,6 +361,7 @@ def _person_public(p):
         "watch_label": p["watch_label"], "photo": _url(best), "n_train": p.get("n_train"),
         "n_seen": p.get("n_seen"), "last_seen": p["last_seen"], "last_seen_ago": _ago(p["last_seen"]),
         "last_place": ls["place"] if ls else None,
+        "last_seen_place": (ls["place"] if ls and ls.get("place") else None) or (_place_near(loc["lat"], loc["lng"]) if loc else None),
         "lat": loc["lat"] if loc else None, "lng": loc["lng"] if loc else None,
         "met": bool(p.get("met")), "met_at": p.get("met_at"), "category": p.get("category"),
         "met_place": meet["place"], "first_seen_ago": meet["ago"], "first_seen": meet["ts"],
@@ -1098,19 +1099,39 @@ VISIT_M = 25.0                # walking this close to a building marks it checke
 search = None                 # the active search, see _start_search
 
 
-def _places_nearby(lat, lng, radius, n=20):
+# "Main buildings": places someone would walk into and that have a real name (campus buildings,
+# libraries, malls, stations, parks...), not every food truck and ATM.
+MAIN_TYPES = ["university", "school", "primary_school", "secondary_school", "library", "hospital",
+              "shopping_mall", "department_store", "supermarket", "stadium", "museum", "church",
+              "city_hall", "police", "fire_station", "transit_station", "bus_station", "train_station",
+              "gym", "park", "movie_theater", "amusement_park", "zoo", "aquarium", "hotel", "lodging",
+              "restaurant", "cafe", "fast_food_restaurant", "convenience_store", "store"]
+_types_ok = {"v": True}   # if Google rejects a type name, fall back to no filter
+
+
+def _places_nearby(lat, lng, radius, n=20, types=None):
     """Google Places Nearby Search (New): places within radius m. Raises on HTTP errors."""
+    import urllib.error
     import urllib.request
     key = settings.get("google_maps_key")
     if not key:
         raise HTTPException(409, "add a Google Maps key (with Places API (New) enabled) to search buildings")
-    body = json.dumps({"maxResultCount": n, "rankPreference": "DISTANCE",
-                       "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": float(radius)}}})
+    q = {"maxResultCount": n, "rankPreference": "DISTANCE",
+         "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": float(radius)}}}
+    if types and _types_ok["v"]:
+        q["includedTypes"] = types
+    body = json.dumps(q)
     req = urllib.request.Request("https://places.googleapis.com/v1/places:searchNearby", data=body.encode(), method="POST",
                                  headers={"Content-Type": "application/json", "X-Goog-Api-Key": key,
                                           "X-Goog-FieldMask": "places.id,places.displayName,places.types,places.location,places.primaryType"})
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code == 400 and "includedTypes" in q:   # a type name Google doesn't accept
+            _types_ok["v"] = False
+            return _places_nearby(lat, lng, radius, n)
+        raise
     month = time.strftime("%Y-%m")
     poi_cache.setdefault("_calls", {})[month] = poi_cache.get("_calls", {}).get(month, 0) + 1
     out = []
@@ -1124,7 +1145,7 @@ def _places_nearby(lat, lng, radius, n=20):
     return out
 
 
-def _buildings_in(lat, lng, radius):
+def _buildings_in(lat, lng, radius, main=True):
     """Every place Google knows inside the circle: tile it into smaller circles (each lookup
     returns at most 20), dedupe, and keep the ones really inside."""
     tile_r = max(120.0, radius / 2.2)
@@ -1141,33 +1162,65 @@ def _buildings_in(lat, lng, radius):
     for _, dx, dy in centers[:SEARCH_MAX_CALLS]:
         clat = lat + dy / 110540.0
         clng = lng + dx / (111320.0 * math.cos(math.radians(lat)))
-        for pl in _places_nearby(clat, clng, tile_r):
+        for pl in _places_nearby(clat, clng, tile_r, types=MAIN_TYPES if main else None):
             d = haversine_m(lat, lng, pl["lat"], pl["lng"])
             if d <= radius and pl["id"] not in found:
                 found[pl["id"]] = {**pl, "dist": round(d)}
     return list(found.values())
 
 
+def _two_opt(seq, start):
+    """Shorten a walking order (open path from `start`) by reversing segments that cross."""
+    if len(seq) < 4:
+        return seq
+    pts = [start] + [(b["lat"], b["lng"]) for b in seq]
+    d = lambda a, b: haversine_m(a[0], a[1], b[0], b[1])  # noqa: E731
+    idx = list(range(1, len(pts)))
+    improved, rounds = True, 0
+    while improved and rounds < 30:
+        improved, rounds = False, rounds + 1
+        path = [0] + idx
+        for i in range(1, len(path) - 1):
+            for j in range(i + 1, len(path)):
+                a, b = pts[path[i - 1]], pts[path[i]]
+                c = pts[path[j]]
+                e = pts[path[j + 1]] if j + 1 < len(path) else None
+                before = d(a, b) + (d(c, e) if e else 0)
+                after = d(a, c) + (d(b, e) if e else 0)
+                if after < before - 0.5:
+                    path[i:j + 1] = path[i:j + 1][::-1]
+                    improved = True
+        idx = path[1:]
+    return [seq[k - 1] for k in idx]
+
+
+def _ring_w(radius):
+    return max(150.0, radius / 6.0)   # bigger circles search in wider rings
+
+
+PRIORITY_W = 1.2   # how much "closer to where they were last seen" outweighs "closer to walk to"
+
+
+def _next_cost(cur, b):
+    """Cost of searching building b next, standing at cur: the walk there plus a penalty for being
+    far from where they were last seen. Close-to-last-seen first, without zig-zagging across the map."""
+    return haversine_m(cur[0], cur[1], b["lat"], b["lng"]) + PRIORITY_W * b["dist"]
+
+
 def _order_buildings(blds, center, here):
-    """Search order: closest to where they were last seen first, in 150 m rings; inside a ring,
-    the next building is the one nearest to the previous (no zig-zagging across the ring)."""
-    rings = {}
-    for b in blds:
-        rings.setdefault(int(b["dist"] // 150), []).append(b)
-    order, cur = [], here or center
-    for r in sorted(rings):
-        left = rings[r][:]
-        while left:
-            nxt = min(left, key=lambda b: haversine_m(cur[0], cur[1], b["lat"], b["lng"]))
-            left.remove(nxt)
-            order.append(nxt)
-            cur = (nxt["lat"], nxt["lng"])
+    """Search order: repeatedly take the cheapest next building (walk + distance from last seen)."""
+    left, order, cur = blds[:], [], here or center
+    while left:
+        nxt = min(left, key=lambda b: _next_cost(cur, b))
+        left.remove(nxt)
+        order.append(nxt)
+        cur = (nxt["lat"], nxt["lng"])
     for i, b in enumerate(order):
         b["order"] = i + 1
     return order
 
 
-def _start_search(pid, minutes=None, speed=None):
+def _start_search(pid, minutes=None, speed=None, main=True):
     global search
     p = db.person(pid)
     if not p:
@@ -1179,7 +1232,7 @@ def _start_search(pid, minutes=None, speed=None):
     elapsed = (minutes * 60.0) if minutes else max(0.0, time.time() - ls["ts"])
     radius = max(SEARCH_MIN_M, min(SEARCH_MAX_M, speed * elapsed))
     try:
-        blds = _buildings_in(ls["lat"], ls["lng"], radius)
+        blds = _buildings_in(ls["lat"], ls["lng"], radius, main=main)
     except HTTPException:
         raise
     except Exception as e:
@@ -1201,9 +1254,7 @@ def _search_next(route=True):
         search["target"] = None
         return None
     here = (geo.lat, geo.lng) if geo.lat is not None else (search["lat"], search["lng"])
-    ring = min(int(b["dist"] // 150) for b in left)   # stay in the innermost ring left
-    nxt = min((b for b in left if int(b["dist"] // 150) == ring),
-              key=lambda b: haversine_m(here[0], here[1], b["lat"], b["lng"]))
+    nxt = min(left, key=lambda b: _next_cost(here, b))
     search["target"] = nxt["id"]
     if route and geo.lat is not None:
         geo.plan(nxt["lat"], nxt["lng"], name=nxt["name"])
@@ -1244,7 +1295,7 @@ async def start_search(pid: str, request: Request):
     """Search area for an alert target: everywhere they could have walked since they were last
     seen (speed x time, or {minutes}), every building in it, in search order, and a route to the first."""
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-    r = _start_search(pid, body.get("minutes"), body.get("speed"))
+    r = _start_search(pid, body.get("minutes"), body.get("speed"), main=body.get("main", True))
     _search_next()
     return _search_public()
 

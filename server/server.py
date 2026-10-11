@@ -10,6 +10,7 @@ returned `display` card on the glasses.
 import json
 import math
 import os
+import bisect
 import threading
 import time
 import uuid
@@ -599,6 +600,89 @@ def _shot_people(people, far, W, H):
 shots.describe = _shot_people
 
 
+_bf = {"key": None, "ts": 0.0, "lock": threading.Lock()}
+BACKFILL_AGE_S = 90
+
+
+def _backfill_shots(force=False):
+    """Every time you saw someone should be in the street view. Sightings are logged on their own (with the
+    camera frame); any encounter (sightings less than a minute apart) that no street-view photo covers, e.g.
+    from before photos were taken or while they were paused, gets its saved camera frame added to the day."""
+    if not _bf["lock"].acquire(blocking=False):
+        return 0
+    try:
+        top = db._run("SELECT MAX(id) AS m FROM sightings", fetch="one")
+        key = ((top or {}).get("m"), len(shots.items), shots.epoch)
+        if not force and key == _bf["key"] and time.time() - _bf["ts"] < 120:
+            return 0
+        rows = db._run("SELECT id, person_id, ts, frame, box, lat, lng, x, y, quality, node_id FROM sightings"
+                       " WHERE frame IS NOT NULL ORDER BY ts", fetch="all") or []
+        cov, srcs = {}, set()
+        for it in shots.items:
+            if it.get("src"):
+                srcs.add(it["src"])
+            for p in it["people"]:
+                cov.setdefault(p["id"], []).append(it["ts"])
+        for v in cov.values():
+            v.sort()
+        by_pid, by_frame = {}, {}
+        for r in rows:
+            by_pid.setdefault(r["person_id"], []).append(r)
+            by_frame.setdefault(r["frame"], []).append(r)
+        now, want, encs = time.time(), {}, []
+        for pid, rs in by_pid.items():
+            enc = [[rs[0]]]
+            for r in rs[1:]:
+                (enc[-1].append(r) if r["ts"] - enc[-1][-1]["ts"] <= 60 else enc.append([r]))
+            encs += [(e[0]["ts"], pid, e) for e in enc]
+        for t0, pid, e in sorted(encs, key=lambda x: x[0]):
+            t1 = e[-1]["ts"]
+            if not force and now - t1 < BACKFILL_AGE_S:
+                continue            # still going on (or just ended): a live photo may cover it
+            lst = cov.get(pid, [])
+            k = bisect.bisect_left(lst, t0 - 15)
+            if k < len(lst) and lst[k] <= t1 + 15:
+                continue
+            best = max(e, key=lambda r: r["quality"] or 0)
+            if best["frame"] in srcs:
+                continue
+            want[best["frame"]] = best
+            for r in by_frame.get(best["frame"], []):      # that frame shows everyone in it: they're covered too
+                bisect.insort(cov.setdefault(r["person_id"], []), r["ts"])
+        added = 0
+        for frame, best in want.items():
+            if not os.path.exists(frame):
+                continue
+            img = cv2.imread(frame)
+            if img is None:
+                continue
+            people = []
+            for r in by_frame.get(frame, []):
+                try:
+                    x1, y1, x2, y2, W, H = json.loads(r["box"])[:6]
+                except Exception:
+                    continue
+                rec = db.person(r["person_id"]) or {}
+                if any(q["id"] == r["person_id"] for q in people):
+                    continue
+                people.append({"id": r["person_id"], "name": rec.get("name") or rec.get("watch_label") or None,
+                               "box": [round(x1 / W, 4), round(y1 / H, 4), round(x2 / W, 4), round(y2 / H, 4)],
+                               "watch": bool(rec.get("is_watch")), "met": bool(rec.get("met")), "possible": False,
+                               "known": bool(rec.get("name") or rec.get("is_watch") or rec.get("met"))})
+            if people and shots.add_seen(img, people, {"lat": best["lat"], "lng": best["lng"], "x": best["x"], "y": best["y"],
+                                                         "node": best["node_id"]}, best["ts"], frame):
+                added += 1
+        if added:
+            shots.finish_backfill()
+        _bf.update(key=((top or {}).get("m"), len(shots.items), shots.epoch), ts=time.time())
+        return added
+    finally:
+        _bf["lock"].release()
+
+
+threading.Thread(target=lambda: _backfill_shots(force=True), daemon=True).start()   # at startup: past sightings → street view
+
+
 def _maybe_shot(img, people, place, ts, force=False):
     """Street view: photos only while walking (~one per 0.8 m, the sharpest frame of each stretch); a
     'moment' photo whenever a known person comes into view; on demand (button / voice 'photo')."""
@@ -608,17 +692,22 @@ def _maybe_shot(img, people, place, ts, force=False):
             "heading": geo.heading if geo.heading_known else None, "floor": geo.floor,
             "stairs": ts - geo.stairs_ts < 5, "node": geo.current_node, "q": geo.quality}
     kind = "manual" if force else None
-    for p in people:                  # anyone coming into view (after a minute away) gets a photo right then
+    need, watch = False, False
+    for p in people:                  # every time you see someone (back after a minute away), at least one photo of it
         if not p["confirmed"] and not (p["is_watch"] and p.get("possible")):
             continue
         pid = p["person_id"]
         prev = shots.in_view.get(pid)
+        if prev is None or ts - prev > 60:
+            shots.enc_start[pid] = ts
         shots.in_view[pid] = ts
-        if prev is not None and ts - prev < (15 if p["is_watch"] else 60):
-            continue
-        if p["is_watch"]:
+        if shots.last_captured.get(pid, -1.0) < shots.enc_start[pid]:
+            need = True
+            watch = watch or bool(p["is_watch"])
+    if need and kind is None:
+        if watch:
             kind = "alert"
-        elif kind is None and ts - shots.last_moment_ts >= 3:      # a crowd: at most one such photo every 3 s
+        elif ts - shots.last_moment_ts >= 3:      # a crowd: at most one such photo every 3 s (the rest get theirs next)
             kind = "person"
     it = None
     if kind and (force or not shots.paused):
@@ -712,10 +801,12 @@ def list_shots(after: int = 0, epoch: int = 0):
     (walk / person / alert / manual), and the known people in each with their box (0-1 of the photo).
     Incremental: pass back `epoch` and the last id you have as `after`; when existing photos changed
     (a turn re-placed some, one was deleted) the epoch moves and you get everything again."""
-    full = epoch != shots.epoch
-    items = shots.items if full else shots.since(after)
+    with shots.lock:
+        ep, n = shots.epoch, len(shots.items)
+        full = epoch != ep
+        items = list(shots.items) if full else shots.since(after)
     named = {n["id"]: n["name"] for n in db.nodes() if n["name"]}
-    return {"epoch": shots.epoch, "full": full, "n": len(shots.items),
+    return {"epoch": ep, "full": full, "n": n,
             "shots": [{**it, "place": named.get(it.get("node"))} for it in items]}
 
 
@@ -767,6 +858,12 @@ def shot_take():
         raise HTTPException(409, "no camera frame yet")
     it = _maybe_shot(geo.last_img, last_people, {"events": []}, time.time(), force=True)
     return {"ok": bool(it), "shot": it, "n": len(shots.items)}
+
+
+@app.post("/shots/backfill")
+def shots_backfill():
+    """Add the camera frames of past sightings that no street-view photo covers (runs by itself too)."""
+    return {"ok": True, "added": _backfill_shots(force=True), "n": len(shots.items)}
 
 
 @app.post("/shots/clear")
@@ -866,10 +963,11 @@ def delete_person(pid: str):
     snap = db.person_snapshot(pid)
     db.delete_person(pid)
     faces._reload_gallery()
+    removed = shots.drop_person(pid)          # their boxes come off the street-view photos
     if not snap:
         return {"ok": True}
     token = uuid.uuid4().hex[:10]
-    undo_log[token] = {"kind": "delete", **snap}
+    undo_log[token] = {"kind": "delete", **snap, "shots": removed}
     while len(undo_log) > 20:
         undo_log.pop(next(iter(undo_log)))
     return {"ok": True, "undo": token, "name": snap["person"]["name"] or "Unknown"}
@@ -884,8 +982,11 @@ async def merge_person(pid: str, request: Request):
     if not snap:
         raise HTTPException(400, "can't merge those two")
     faces._reload_gallery()
+    dst = db.person(into) or {}
+    changed = shots.rename_person(pid, into, name=dst.get("name") or dst.get("watch_label") or "",
+                                  known=bool(dst.get("name") or dst.get("is_watch") or dst.get("met")))
     token = uuid.uuid4().hex[:10]
-    undo_log[token] = snap
+    undo_log[token] = {**snap, "shots": changed}
     while len(undo_log) > 20:
         undo_log.pop(next(iter(undo_log)))
     return {"ok": True, "person_id": into, "undo": token,
@@ -900,10 +1001,18 @@ def undo(token: str):
         if not db.restore_person(snap):
             raise HTTPException(404, "nothing to undo")
         faces._reload_gallery()
+        shots.restore_entries(snap.get("shots") or [])
         return {"ok": True, "person_id": snap["person"]["id"]}
     if not snap or not db.undo_merge(snap):
         raise HTTPException(404, "nothing to undo")
     faces._reload_gallery()
+    if snap.get("shots"):
+        only = {}
+        for sid, box in snap["shots"]:
+            only.setdefault(sid, []).append(box)
+        a = snap["src"]
+        shots.rename_person(snap["dst"]["id"], a["id"], name=a.get("name") or a.get("watch_label") or "",
+                            known=bool(a.get("name") or a.get("is_watch") or a.get("met")), only=only)
     return {"ok": True, "person_id": snap["src"]["id"]}
 
 
@@ -1790,6 +1899,8 @@ async def command(request: Request):
 # ---------------------------------------------------------------- misc
 @app.get("/state")
 def state():
+    if time.time() - _bf["ts"] > 20 and not _bf["lock"].locked():
+        threading.Thread(target=_backfill_shots, daemon=True).start()   # past sightings → street view (in the background)
     public = list_people()
     return {
         "people": public,

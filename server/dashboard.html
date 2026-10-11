@@ -308,6 +308,20 @@ body.svopen main,body.svopen header{visibility:hidden}
   </div>
 </main>
 
+<div class="svov" id="svov" tabindex="0">
+  <div class="svbar"><span class="title">Street view</span><span id="svWhen" style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap"></span><span class="spacer"></span><span class="muted" id="svCount"></span><button class="primary exit" onclick="svClose()">✕ Exit</button></div>
+  <div class="svbody">
+    <div class="svstage" id="svStage">
+      <img class="svl" id="svA" alt=""><img class="svl" id="svB" alt="" style="opacity:0">
+      <div id="svBoxes"></div>
+      <button class="svnav l" id="svPrev" onclick="svStep(-1)" title="Previous (←)"><b>‹</b> Previous</button>
+      <button class="svnav r" id="svNext" onclick="svStep(1)" title="Next (→)">Next <b>›</b></button>
+      <div class="svempty" id="svEmpty"><b>No photos yet</b><small>They're taken while you walk.</small></div>
+    </div>
+    <div class="svside" id="svPeople"></div>
+  </div>
+  <div class="svtime"><button class="primary" id="svPlayBtn" onclick="svPlay()" title="Play the day (space)" style="min-width:92px">▶ Play</button><button class="ghost" id="svSpeedBtn" onclick="svSpeed()" title="Playback speed">2×</button><small class="muted" id="svT0"></small><div style="flex:1"><input type="range" id="svTime" min="0" max="0" value="0" oninput="svScrub(+this.value)" style="width:100%"><div class="svticks" id="svTicks"></div></div><small class="muted" id="svT1"></small></div>
+</div>
 <div class="overlay" id="personOverlay" onclick="if(event.target===this)closePerson()"><div class="modal" id="personModal"></div></div>
 <div class="overlay" id="alertOverlay" onclick="if(event.target===this)closeAlert()"><div class="modal" style="max-width:640px" id="alertModal"></div></div>
 
@@ -402,7 +416,7 @@ function svOpen(i){
   SV.open=true;$('svov').classList.add('open');document.body.style.overflow='hidden';document.body.classList.add('svopen');
   svEncounters();svPeople();svScrubber();svShow(i==null?SV.items.length-1:i,'jump');setTimeout(()=>$('svov').focus(),30);
 }
-function svClose(){SV.open=false;$('svov').classList.remove('open');document.body.style.overflow='';document.body.classList.remove('svopen')}
+function svClose(){svStop();SV.open=false;$('svov').classList.remove('open');document.body.style.overflow='';document.body.classList.remove('svopen')}
 // ---- one photo, with a Street-View-like move: next = zoom in + fade, previous = zoom out
 function svShow(i,dir){
   if(!SV.items.length){$('svEmpty').style.display='flex';return}
@@ -421,7 +435,13 @@ function svShow(i,dir){
   svCaption(it);svCount();svNavState();svPeopleCur();svPreload(i);
   const t=$('svTime');if(document.activeElement!==t)t.value=i;
 }
-function svStep(d){const j=SV.i+d;if(j<0||j>=SV.items.length)return;svShow(j,d>0?'fwd':'back')}
+function svStep(d,keepPlaying){if(!keepPlaying)svStop();const j=SV.i+d;if(j<0||j>=SV.items.length)return;svShow(j,d>0?'fwd':'back')}
+// ---- play: step through the day by itself (1× ≈ walking pace, 2×, 4×)
+const SV_SPEEDS={1:450,2:220,4:110};SV.speed=2;
+function svPlay(){if(SV.play){svStop();return}if(SV.i>=SV.items.length-1)svShow(0,'jump');$('svPlayBtn').textContent='⏸ Pause';svTick()}
+function svTick(){clearTimeout(SV.play);SV.play=setTimeout(()=>{if(!SV.open||SV.i>=SV.items.length-1){svStop();return}svShow(SV.i+1,'fwd');svTick()},SV_SPEEDS[SV.speed])}
+function svStop(){if(SV.play){clearTimeout(SV.play);SV.play=null}const b=$('svPlayBtn');if(b)b.textContent='▶ Play'}
+function svSpeed(){SV.speed=SV.speed===1?2:SV.speed===2?4:1;$('svSpeedBtn').textContent=SV.speed+'×';if(SV.play)svTick()}
 function svNavState(){$('svPrev').disabled=SV.i<=0;$('svNext').disabled=SV.i>=SV.items.length-1}
 function svCount(){$('svCount').textContent=SV.items.length?`${SV.i+1} / ${SV.items.length}`:''}
 function svPreload(i){SV._pre=SV._pre||{};for(const k of [i+1,i+2,i+3,i+4,i-1,i-2]){const s=SV.items[k];if(s&&!SV._pre[s.id]){const im=new Image();im.src='/shots/'+s.id+'.jpg';SV._pre[s.id]=im}}
@@ -473,8 +493,10 @@ function svScrub(v){svShow(v,'jump')}
 // keyboard: ← → (or ↑ ↓) previous / next, hold to keep going; Esc = exit
 document.addEventListener('keydown',e=>{if(!SV.open||$('lb').classList.contains('open')||$('personOverlay').classList.contains('open'))return;
   if(e.key==='Escape'){svClose();return}
+  if(e.key===' '){e.preventDefault();svPlay();return}
   const fwd=e.key==='ArrowRight'||e.key==='ArrowUp',back=e.key==='ArrowLeft'||e.key==='ArrowDown';if(!fwd&&!back)return;e.preventDefault();
   const now=Date.now();if(SV._kt&&now-SV._kt<110)return;SV._kt=now;svStep(fwd?1:-1)});
+$('svov').addEventListener('mousedown',e=>{if(e.target.closest('button'))e.preventDefault()});   // keep keyboard focus off buttons (space = play)
 // ---- jump in from elsewhere: a person, a moment in time, a spot on the map
 async function svEnsure(){if(S&&(S.shots_epoch!==SV.epoch||S.n_shots!==SV.items.length))await svFetch(S.shots_epoch!==SV.epoch)}
 async function svPerson(pid){await svEnsure();for(let i=SV.items.length-1;i>=0;i--)if((SV.items[i].people||[]).some(p=>p.id===pid)){svOpen(i);return}
@@ -986,19 +1008,5 @@ async function markPlace(){const n=prompt('Name the place you are standing at:',
 async function clearMap(){if(!confirm('Forget all places and walked paths? People and photos stay.'))return;await api('/map/clear',{method:'POST'});toast('Map cleared')}
 async function deleteAll(){if(!confirm('Wipe EVERYTHING: people, photos, places?'))return;await api('/reset',{method:'POST'});lastPeopleKey='';lastTlKey='';toast('Everything deleted')}
 </script>
-<div class="svov" id="svov" tabindex="0">
-  <div class="svbar"><span class="title">Street view</span><span id="svWhen" style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap"></span><span class="spacer"></span><span class="muted" id="svCount"></span><button class="primary exit" onclick="svClose()">✕ Exit</button></div>
-  <div class="svbody">
-    <div class="svstage" id="svStage">
-      <img class="svl" id="svA" alt=""><img class="svl" id="svB" alt="" style="opacity:0">
-      <div id="svBoxes"></div>
-      <button class="svnav l" id="svPrev" onclick="svStep(-1)" title="Previous (←)"><b>‹</b> Previous</button>
-      <button class="svnav r" id="svNext" onclick="svStep(1)" title="Next (→)">Next <b>›</b></button>
-      <div class="svempty" id="svEmpty"><b>No photos yet</b><small>They're taken while you walk.</small></div>
-    </div>
-    <div class="svside" id="svPeople"></div>
-  </div>
-  <div class="svtime"><small class="muted" id="svT0"></small><div style="flex:1"><input type="range" id="svTime" min="0" max="0" value="0" oninput="svScrub(+this.value)" style="width:100%"><div class="svticks" id="svTicks"></div></div><small class="muted" id="svT1"></small></div>
-</div>
 </body>
 </html>

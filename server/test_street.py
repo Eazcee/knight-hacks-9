@@ -253,6 +253,37 @@ check(mo and mo[0]["id"] == m["id"], "Dana's card → her moments (the street vi
 at = c.get("/shots/at", params={"ts": m["ts"] + 5, "person": named["person_id"]}).json()
 check(at["id"] == m["id"], "a sighting time → the photo with her in it")
 
+# 5c-2. every time you saw someone is in the street view: sightings with no photo (photos were paused) get their frame added
+c.post("/command", json={"text": "pause photos"})
+T["now"] += 200            # everyone out of view for a while, then back while photos are paused
+n_b = c.get("/shots").json()["n"]
+for _ in range(3):
+    frame(img=group, step=False, compass=0)
+check(c.get("/shots").json()["n"] == n_b, "paused: no street-view photos (the sightings are still logged)")
+c.post("/command", json={"text": "resume photos"})
+bf = c.post("/shots/backfill").json()
+sv = c.get("/shots").json()
+seen = [s for s in sv["shots"] if s["kind"] == "seen"]
+check(bf["added"] >= 1 and seen and any(p["name"] == "Dana" for p in seen[-1]["people"]) and len(seen[-1]["people"]) >= 4,
+      f"that encounter is added to the day from the sighting log ({bf['added']} photo, {len(seen[-1]['people']) if seen else 0} people in it)")
+check(c.post("/shots/backfill").json()["added"] == 0, "…once: running it again adds nothing (earlier encounters already had photos)")
+check(all(sv["shots"][k]["id"] < sv["shots"][k + 1]["id"] for k in range(len(sv["shots"]) - 1)), "the day stays in time order")
+
+# 5c-3. sorting people on the dashboard updates the photos: merge an unknown into Dana, undo; delete someone, undo
+other, gone = ppl[4], ppl[5]
+cnt = lambda pid: sum(1 for s in c.get("/shots").json()["shots"] for p in s["people"] if p["id"] == pid)
+n_other, n_dana = cnt(other["person_id"]), cnt(named["person_id"])
+mg = c.post(f"/people/{other['person_id']}/merge", json={"into": named["person_id"]}).json()
+check(n_other > 0 and cnt(other["person_id"]) == 0 and cnt(named["person_id"]) == n_dana + n_other,
+      f"merging an unknown into Dana: their {n_other} boxes in the photos now say Dana")
+c.post(f"/undo/{mg['undo']}")
+check(cnt(other["person_id"]) == n_other and cnt(named["person_id"]) == n_dana, "undo the merge: the boxes go back")
+n_gone = cnt(gone["person_id"])
+dl = c.delete(f"/people/{gone['person_id']}").json()
+check(n_gone > 0 and cnt(gone["person_id"]) == 0, f"deleting a person takes their {n_gone} boxes off the photos")
+c.post(f"/undo/{dl['undo']}")
+check(cnt(gone["person_id"]) == n_gone, "undo the delete: they're back in the photos")
+
 # 5d. floors: the barometer sees ~0.4 hPa less per floor up; the stairs join the floors; voice too
 f0 = c.get("/state").json()["map"]["position"]["floor"]
 for i in range(20):

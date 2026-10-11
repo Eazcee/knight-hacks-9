@@ -32,6 +32,9 @@ To get more pixels: stream **HIGH (720×1280)** and upload frames **without shri
 - **Routes**: `/route?to_person=` (their last sighting), `?to_name=` / `?to=` (a place), `?lat=&lng=` (map click). Glasses card: `→ Dana / LEFT · 24 m / 120 m left · 2 min · 3 turns`. Reaching a waypoint advances; seeing the person's face ends the route with **FOUND**. "blocked" (voice, QR, or tapping a path on the map) blocks the stretch ahead and reroutes; if there's no other walked path it goes direct.
 - **Satellite map**: Esri World Imagery + labels by default (free, no key; the laptop needs internet for tiles; Leaflet is served locally). For Google's hybrid view, paste a **Maps JavaScript API key** into the "Google Maps key" box under the map (saved in `data/settings.json`); the dashboard reloads on Google Maps and falls back to Esri if the key is rejected.
 
+### AMBER search area
+On the dashboard's Watchlist, **Search area** (for someone who was seen at a known spot) draws everywhere they could have walked since: radius = 1.5 m/s (~3.4 mph) × time since last seen, capped at 2 miles. Every place Google Places knows inside that circle is listed and numbered in search order: closest to where they were last seen first, in 150 m rings, nearest-next inside a ring. The glasses route you building to building (`→ Library / LEFT · 40 m / … / search 3/24 · Maya`); walking up to a building checks it off and routes to the next; "nothing here" / "next" by voice does the same; seeing them ends the route and fires the alert. "Expand to now" recomputes the circle as time passes. Needs the Google key with **Places API (New)**; one search uses up to 16 lookups. API: `POST /search/start/{pid}` `{minutes?, speed?}`, `GET /search`, `POST /search/check` `{id?, unchecked?}`, `POST /search/go` `{id?}`, `DELETE /search`.
+
 ## 1. Run it (5 minutes)
 
 ```bash

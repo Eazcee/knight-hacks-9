@@ -153,6 +153,19 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .amber-photo{width:120px;height:150px;border:2px dashed #4b5563;border-radius:10px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer;background:#0b0d10 center/cover no-repeat;color:var(--muted)}
 .amber-photo input{display:none}
 #undoBar{position:fixed;left:20px;bottom:20px;background:#1d2229;border:1px solid var(--line);border-radius:10px;padding:10px 14px;display:none;align-items:center;gap:12px;z-index:61;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+.srch{border-color:#6b2a2a;background:linear-gradient(180deg,#221212,var(--panel) 120px)}
+.srch .bl{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px;max-height:300px;overflow:auto;margin-top:10px}
+.srch .b{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px}
+.srch .b.done{opacity:.45;text-decoration:line-through}
+.srch .b.next{border-color:#f59e0b;box-shadow:0 0 0 1px #f59e0b inset}
+.srch .b .o{width:22px;height:22px;border-radius:50%;background:#f59e0b;color:#1a1200;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;flex:none}
+.srch .b.done .o{background:#4b5563;color:#cbd5e1}
+.srch .b .nm2{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srch .b input[type=checkbox]{width:auto;flex:none;transform:scale(1.2)}
+.bmk{width:20px;height:20px;border-radius:50%;background:#f59e0b;color:#1a1200;font:700 10px system-ui;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px #000}
+.bmk.done{background:#4b5563;color:#e5e7eb;border-color:#9ca3af}
+.bmk.next{width:26px;height:26px;font-size:12px;background:#ef4444;color:#fff;animation:wpulse 1.2s infinite}
+.lastseen{width:30px;height:30px;border-radius:50%;background:#ef4444;border:3px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font:700 13px system-ui;box-shadow:0 0 0 6px rgba(239,68,68,.3)}
 .wl{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:8px;background:var(--panel2)}
 .wl img{width:52px;height:52px;border-radius:10px;object-fit:cover;background:#0b0d10}
 .wl.in_view{border-color:#ef4444;background:#2a1414;animation:wpulse 1.2s infinite}
@@ -190,6 +203,8 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
         </div>
       </div>
     </div>
+
+    <div id="searchPanel"></div>
 
     <div class="panel">
       <h2>People <span class="muted" id="peopleCount"></span>
@@ -264,7 +279,7 @@ let S=null, lastPeopleKey='', lastTlKey='', personOpen=null;
 
 async function tick(){
   try{S=await api('/state')}catch(e){return}
-  renderChips();renderLive();renderHud();renderAlerts();renderTrain();renderPeople();renderTimeline();drawMap();
+  renderChips();renderLive();renderHud();renderAlerts();renderSearch();renderTrain();renderPeople();renderTimeline();drawMap();
 }
 setInterval(tick,1000);tick();
 setInterval(()=>{if(S&&S.n_suggestions>0)loadSuggestions();else $('suggestions').innerHTML=''},4000);
@@ -308,9 +323,36 @@ function renderAlerts(){
       <div style="flex:1;min-width:0"><b>${esc(w.watch_label||w.name||'Alert')}</b><br><small>${st}</small></div>
       <div style="display:flex;flex-direction:column;gap:4px">
       ${w.status!=='not_seen'?`<button onclick="navTo('${w.id}')">Navigate</button>`:''}
+      ${w.status==='seen'||w.status==='possible'?`<button style="border-color:#6b2a2a" onclick="startSearch('${w.id}')" title="Everywhere they could have walked since, and every building in it">Search area</button>`:''}
       ${w.status==='in_view'?`<button class="primary" onclick="api('/report',{method:'POST'}).then(r=>toast(r.say||'Reported',5000))">Report</button>`:''}
       <button class="ghost" onclick="if(confirm('Stop watching for them?'))api('/watch/${w.id}',{method:'DELETE'}).then(tick)">Clear</button></div></div>`}).join('')
    :'<small>Nobody on the watchlist. Add an alert photo (e.g. a missing person): Beacon checks whether you already passed them, where, and alerts the glasses the moment they appear.</small>';
+}
+async function startSearch(pid,minutes){
+  toast('Finding every building they could have reached…',8000);
+  try{const r=await api('/search/start/'+pid,{method:'POST',json:minutes?{minutes:+minutes}:{}});
+    toast(`${r.n} places within ${(r.radius_m/1609).toFixed(1)} mi. Routing to the first.`,5000);renderSearch._k='';tick();
+    if(MR&&r.lat!=null){follow=false;$('followBtn').textContent='Follow';MR.setView(r.lat,r.lng,r.radius_m>1500?14:r.radius_m>600?15:17)}}catch(e){}
+}
+function renderSearch(){
+  const z=S.search;const el=$('searchPanel');
+  if(!z){if(el.innerHTML)el.innerHTML='';return}
+  const key=JSON.stringify([z.n_checked,z.target&&z.target.id,z.radius_m,z.seen_ago,z.reach_now_m]);if(key===renderSearch._k)return;renderSearch._k=key;
+  const mi=m=>(m/1609).toFixed(m<1609?2:1)+' mi';
+  el.innerHTML=`<div class="panel srch">
+    <h2><span class="amber-badge" style="font-size:11px;padding:2px 8px">SEARCH</span> <span style="text-transform:none;letter-spacing:0;color:var(--text);font-size:14px">${esc(z.label||z.name)}</span>
+      <span class="right"><button onclick="api('/search/check',{method:'POST'}).then(tick)" title="Nobody there: mark it and go to the next">Searched ✓ next</button>
+      <button onclick="api('/search/go',{method:'POST'}).then(tick)">Route to next</button>
+      <button onclick="startSearch('${z.person_id}')" title="They've had more time to walk: recompute the circle">Expand to now</button>
+      <button class="danger" onclick="api('/search',{method:'DELETE'}).then(()=>{renderSearch._k='';tick()})">End</button></span></h2>
+    <div class="row" style="gap:16px"><small>Last seen <b>${esc(z.seen_ago)}</b>${z.place?' at <b>'+esc(z.place)+'</b>':''}</small>
+      <small>Search circle <b>${mi(z.radius_m)}</b> (walking ${(z.speed*2.237).toFixed(1)} mph)${z.reach_now_m>z.radius_m*1.2?` · <span style="color:#f59e0b">could be ${mi(z.reach_now_m)} by now</span>`:''}</small>
+      <small><b>${z.n_checked}</b> of <b>${z.n}</b> places checked</small>
+      ${z.target?`<small>Next: <b>${esc(z.target.name)}</b></small>`:''}</div>
+    <div class="bl">${z.buildings.map(b=>`<div class="b ${b.checked?'done':''} ${b.next?'next':''}">
+      <span class="o">${b.order}</span><span class="nm2" title="${esc(b.name)} · ${esc(b.type||'')}">${esc(b.name)}<br><small class="muted">${b.dist} m from last seen · ${esc(b.type||'')}</small></span>
+      <button class="ghost" style="padding:2px 6px;font-size:11px" onclick="api('/search/go',{method:'POST',json:{id:'${b.id}'}}).then(tick)">Go</button>
+      <input type="checkbox" ${b.checked?'checked':''} title="Searched" onchange="api('/search/check',{method:'POST',json:{id:'${b.id}',unchecked:!this.checked}}).then(tick)"></div>`).join('')||'<small>No buildings found in this circle.</small>'}</div></div>`;
 }
 function renderTrain(){
   const t=S.train;const b=$('trainBanner');
@@ -684,6 +726,18 @@ function drawMap(){
   // route
   if(m.route&&m.route.ok&&pos.lat!=null){const pts=[[pos.lat,pos.lng]].concat(m.route.waypoints.map(w=>[w.lat,w.lng]));
     MR.polyline('route',pts,{color:'#4cc38a',weight:5,opacity:.95,dash:m.route.mode==='compass'?'8 10':null,z:5});keep.add('route')}
+  // search area: reach circle, last-seen point, every building in search order
+  const z=S.search;
+  if(z){
+    MR.circle('s_reach_now',z.lat,z.lng,z.reach_now_m,{color:'#f59e0b',fill:.03,weight:1,opacity:.6});keep.add('s_reach_now');
+    MR.circle('s_area',z.lat,z.lng,z.radius_m,{color:'#ef4444',fill:.08,weight:2,opacity:.9});keep.add('s_area');
+    MR.marker('s_last',z.lat,z.lng,{html:'<div class="lastseen" title="last seen">!</div>',w:30,h:30,z:950,title:'last seen '+z.seen_ago});keep.add('s_last');
+    z.buildings.forEach(b=>{const k='b'+b.id;keep.add(k);
+      MR.marker(k,b.lat,b.lng,{html:`<div class="bmk ${b.checked?'done':''} ${b.next?'next':''}" title="${esc(b.name)}">${b.order}</div>`,w:b.next?26:20,h:b.next?26:20,z:b.next?940:(b.checked?200:600),title:b.name,
+        popupHtml:()=>`<b>${esc(b.name)}</b><br><small>#${b.order} · ${b.dist} m from where they were last seen · ${esc(b.type||'')}</small>
+          <div class="row" style="margin-top:8px"><button onclick="api('/search/go',{method:'POST',json:{id:'${b.id}'}}).then(()=>{MR.closePopup();tick()})">Go here</button>
+          <button onclick="api('/search/check',{method:'POST',json:{id:'${b.id}'}}).then(()=>{MR.closePopup();tick()})">Searched ✓</button></div>`})});
+  }
   // people pins
   const OFF=fanOut(m.pins);
   m.pins.forEach(p=>{const k='p'+p.id;keep.add(k);

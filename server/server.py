@@ -8,6 +8,7 @@ The phone app (or webcam_client.py) POSTs JPEG frames to /frame and renders the
 returned `display` card on the glasses.
 """
 import json
+import math
 import os
 import threading
 import time
@@ -289,7 +290,13 @@ def _build_display(people, place, alerts, next_step, train):
                 "lines": ["look around for them"] if arrived.get("person_id") else []}
     card = _people_card(people)
     if next_step:
-        return _nav_card(next_step, [card["title"]] if card else [])
+        extra = [f"search {len(search['checked'])}/{len(search['buildings'])} · {search['name']}"] if search else []
+        return _nav_card(next_step, extra + ([card["title"]] if card else []))
+    if search:
+        left = len(search["buildings"]) - len(search["checked"])
+        return {"level": "info", "title": f"Search · {search['name']}",
+                "lines": [f"{left} places left" if left else "every place checked",
+                          "say 'next' for the next building" if left else "say 'stop search' to end"]}
     if card:
         return card
     return {"level": "quiet", "title": "", "lines": []}
@@ -466,6 +473,15 @@ def _pipeline(img, heading, steps, lat, lng, acc, ts):
     for p in people:   # walking to someone and the camera sees them: that's the arrival
         if p["confirmed"] and not p.get("possible") and geo.found(p["person_id"]):
             place["next"] = None
+        if search and p["person_id"] == search["person_id"] and p["confirmed"] and not p.get("possible"):
+            geo.cancel()   # found them: the alert card takes over
+            place["next"] = None
+    if search and any(e["type"] == "arrived_goal" for e in place["events"]) and search["target"]:
+        _search_check(search["target"])
+    _search_tick()
+    if search and place["next"] is None and geo.route is None and search["target"] is None:
+        _search_next()
+    place["next"] = geo.next_step()
     alerts = _record(people, img, place, ts)
     _draw_live(img, people, faces.last_far)
     last_people = people
@@ -1060,6 +1076,211 @@ async def name_group(request: Request):
     return {"ok": True, "node_id": nid, "name": name}
 
 
+# ---------------------------------------------------------------- search area (AMBER)
+SEARCH_SPEED_MPS = 1.5        # brisk walk, ~3.4 mph: how far someone can get on foot
+SEARCH_MAX_M = 3200.0         # cap the search circle at 2 miles
+SEARCH_MIN_M = 150.0
+SEARCH_MAX_CALLS = 16         # Places lookups per search area (each returns up to 20 places)
+VISIT_M = 25.0                # walking this close to a building marks it checked
+search = None                 # the active search, see _start_search
+
+
+def _places_nearby(lat, lng, radius, n=20):
+    """Google Places Nearby Search (New): places within radius m. Raises on HTTP errors."""
+    import urllib.request
+    key = settings.get("google_maps_key")
+    if not key:
+        raise HTTPException(409, "add a Google Maps key (with Places API (New) enabled) to search buildings")
+    body = json.dumps({"maxResultCount": n, "rankPreference": "DISTANCE",
+                       "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": float(radius)}}})
+    req = urllib.request.Request("https://places.googleapis.com/v1/places:searchNearby", data=body.encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "X-Goog-Api-Key": key,
+                                          "X-Goog-FieldMask": "places.id,places.displayName,places.types,places.location,places.primaryType"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode())
+    month = time.strftime("%Y-%m")
+    poi_cache.setdefault("_calls", {})[month] = poi_cache.get("_calls", {}).get(month, 0) + 1
+    out = []
+    for pl in data.get("places", []):
+        types = set(pl.get("types", []))
+        if types & SKIP_TYPES or not pl.get("location"):
+            continue
+        out.append({"id": pl.get("id"), "name": (pl.get("displayName") or {}).get("text", "?"),
+                    "lat": pl["location"]["latitude"], "lng": pl["location"]["longitude"],
+                    "type": (pl.get("primaryType") or next(iter(types), "")).replace("_", " ")})
+    return out
+
+
+def _buildings_in(lat, lng, radius):
+    """Every place Google knows inside the circle: tile it into smaller circles (each lookup
+    returns at most 20), dedupe, and keep the ones really inside."""
+    tile_r = max(120.0, radius / 2.2)
+    step = tile_r * 1.5
+    k = int(math.ceil(radius / step))
+    centers = []
+    for i in range(-k, k + 1):
+        for j in range(-k, k + 1):
+            dx, dy = i * step, j * step
+            if math.hypot(dx, dy) <= radius + tile_r * 0.5:
+                centers.append((math.hypot(dx, dy), dx, dy))
+    centers.sort()
+    found = {}
+    for _, dx, dy in centers[:SEARCH_MAX_CALLS]:
+        clat = lat + dy / 110540.0
+        clng = lng + dx / (111320.0 * math.cos(math.radians(lat)))
+        for pl in _places_nearby(clat, clng, tile_r):
+            d = haversine_m(lat, lng, pl["lat"], pl["lng"])
+            if d <= radius and pl["id"] not in found:
+                found[pl["id"]] = {**pl, "dist": round(d)}
+    return list(found.values())
+
+
+def _order_buildings(blds, center, here):
+    """Search order: closest to where they were last seen first, in 150 m rings; inside a ring,
+    the next building is the one nearest to the previous (no zig-zagging across the ring)."""
+    rings = {}
+    for b in blds:
+        rings.setdefault(int(b["dist"] // 150), []).append(b)
+    order, cur = [], here or center
+    for r in sorted(rings):
+        left = rings[r][:]
+        while left:
+            nxt = min(left, key=lambda b: haversine_m(cur[0], cur[1], b["lat"], b["lng"]))
+            left.remove(nxt)
+            order.append(nxt)
+            cur = (nxt["lat"], nxt["lng"])
+    for i, b in enumerate(order):
+        b["order"] = i + 1
+    return order
+
+
+def _start_search(pid, minutes=None, speed=None):
+    global search
+    p = db.person(pid)
+    if not p:
+        raise HTTPException(404, "no such person")
+    ls = db.last_located_sighting(pid)
+    if not ls:
+        raise HTTPException(404, "they were never seen at a known map position")
+    speed = float(speed or SEARCH_SPEED_MPS)
+    elapsed = (minutes * 60.0) if minutes else max(0.0, time.time() - ls["ts"])
+    radius = max(SEARCH_MIN_M, min(SEARCH_MAX_M, speed * elapsed))
+    try:
+        blds = _buildings_in(ls["lat"], ls["lng"], radius)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"building lookup failed: {e}")
+    here = (geo.lat, geo.lng) if geo.lat is not None else None
+    search = {"person_id": pid, "name": p["name"] or "them", "label": p["watch_label"] or p["name"] or "",
+              "lat": ls["lat"], "lng": ls["lng"], "seen_ts": ls["ts"], "place": ls.get("place") or _place_near(ls["lat"], ls["lng"]),
+              "speed": speed, "minutes": minutes, "radius": radius, "started": time.time(),
+              "buildings": _order_buildings(blds, (ls["lat"], ls["lng"]), here), "checked": set(), "target": None}
+    return _search_public()
+
+
+def _search_next(route=True):
+    """Route to the next building nobody has checked yet."""
+    if not search:
+        return None
+    left = [b for b in search["buildings"] if b["id"] not in search["checked"]]
+    if not left:
+        search["target"] = None
+        return None
+    here = (geo.lat, geo.lng) if geo.lat is not None else (search["lat"], search["lng"])
+    ring = min(int(b["dist"] // 150) for b in left)   # stay in the innermost ring left
+    nxt = min((b for b in left if int(b["dist"] // 150) == ring),
+              key=lambda b: haversine_m(here[0], here[1], b["lat"], b["lng"]))
+    search["target"] = nxt["id"]
+    if route and geo.lat is not None:
+        geo.plan(nxt["lat"], nxt["lng"], name=nxt["name"])
+    return nxt
+
+
+def _search_check(bid):
+    if search and bid:
+        search["checked"].add(bid)
+
+
+def _search_tick():
+    """Each frame: walking up to a building marks it checked; arriving at the target moves on."""
+    if not search or geo.lat is None:
+        return
+    for b in search["buildings"]:
+        if b["id"] not in search["checked"] and haversine_m(geo.lat, geo.lng, b["lat"], b["lng"]) <= VISIT_M:
+            search["checked"].add(b["id"])
+    if search["target"] and search["target"] in search["checked"]:
+        _search_next()
+
+
+def _search_public():
+    if not search:
+        return None
+    s = search
+    reach = s["speed"] * (time.time() - s["seen_ts"]) if not s["minutes"] else s["radius"]
+    tgt = next((b for b in s["buildings"] if b["id"] == s["target"]), None)
+    return {"person_id": s["person_id"], "name": s["name"], "label": s["label"], "lat": s["lat"], "lng": s["lng"],
+            "place": s["place"], "seen_ago": _ago(s["seen_ts"]), "radius_m": round(s["radius"]),
+            "reach_now_m": round(min(SEARCH_MAX_M, max(SEARCH_MIN_M, reach))), "speed": s["speed"],
+            "buildings": [{**b, "checked": b["id"] in s["checked"], "next": b["id"] == s["target"]} for b in s["buildings"]],
+            "n": len(s["buildings"]), "n_checked": len(s["checked"]), "target": tgt}
+
+
+@app.post("/search/start/{pid}")
+async def start_search(pid: str, request: Request):
+    """Search area for an alert target: everywhere they could have walked since they were last
+    seen (speed x time, or {minutes}), every building in it, in search order, and a route to the first."""
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    r = _start_search(pid, body.get("minutes"), body.get("speed"))
+    _search_next()
+    return _search_public()
+
+
+@app.get("/search")
+def get_search():
+    return _search_public() or {}
+
+
+@app.post("/search/check")
+async def search_check(request: Request):
+    """Mark a building searched ({id}, or the current target) and route to the next one."""
+    if not search:
+        raise HTTPException(404, "no active search")
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    bid = body.get("id") or search["target"]
+    if body.get("unchecked"):
+        search["checked"].discard(bid)
+    else:
+        _search_check(bid)
+    if bid == search["target"] or not search["target"]:
+        _search_next()
+    return _search_public()
+
+
+@app.post("/search/go")
+async def search_go(request: Request):
+    """Route to a specific building ({id}) or the next one."""
+    if not search:
+        raise HTTPException(404, "no active search")
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    b = next((b for b in search["buildings"] if b["id"] == body.get("id")), None)
+    if b:
+        search["target"] = b["id"]
+        if geo.lat is not None:
+            geo.plan(b["lat"], b["lng"], name=b["name"])
+    else:
+        _search_next()
+    return _search_public()
+
+
+@app.delete("/search")
+def end_search():
+    global search
+    search = None
+    geo.cancel()
+    return {"ok": True}
+
+
 def _watchlist(public):
     """Alert targets with what the glasses know: in view now / last seen where / never."""
     in_view = {p["person_id"]: p for p in last_people if p["is_watch"]}
@@ -1208,6 +1429,16 @@ async def command(request: Request):
             return {"ok": False, "say": "Never seen them at a known position"}
         r = _route_to_person(p["id"])
         return {"ok": r["ok"], "say": f"Last seen {ls['place'] + ' ' if ls['place'] else ''}{_ago(ls['ts'])}. " + _say_route(r), "route": r}
+    if text in ("next", "next building", "searched", "checked", "clear", "nothing here", "not here"):
+        if not search:
+            return {"ok": False, "say": "No search running"}
+        if text != "next" and text != "next building":
+            _search_check(search["target"])
+        b = _search_next()
+        return {"ok": bool(b), "say": f"Next: {b['name']}, {b['dist']} meters from where they were seen" if b else "Every place is checked"}
+    if text in ("stop search", "end search", "cancel search"):
+        end_search()
+        return {"ok": True, "say": "Search ended"}
     if text in ("scan", "scan the room", "scan room", "scan the crowd", "look around", "who's here", "who is here"):
         # the server can't take the photo: the app sees action=scan, captures a photo, POSTs it to /scan
         return {"ok": True, "action": "scan", "say": "Scanning, hold still"}
@@ -1231,6 +1462,7 @@ def state():
         "categories": db.categories(),
         "groups": _groups(public),
         "watchlist": _watchlist(public),
+        "search": _search_public(),
         "last_shown": {**last_shown, "ago": _ago(last_shown["ts"]) if last_shown["ts"] else None},
         "sightings": [_sighting_public(s) for s in db.sightings(limit=30)],
         "map": {**geo.state(), "pins": _pins(public), "near": _poi(geo.lat, geo.lng),
@@ -1294,6 +1526,7 @@ def reset():
     hold.update(until=0.0, display=None)
     card_hold.update(card=None, ts=0.0)
     last_shown.update(card=None, ts=0.0)
+    globals()["search"] = None
     faces.last_far = []
     recent_alerts.clear()
     reports.clear()

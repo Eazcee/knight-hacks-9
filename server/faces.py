@@ -45,7 +45,7 @@ MAX_EMB_PER_PERSON = 16       # training photos kept per person
 NEW_MIN_QUALITY = 0.45        # a stranger needs a decent photo before we create a person
 TRAIN_MIN_QUALITY = 0.45      # automatic additions to a training set
 TRAIN_MODE_MIN_QUALITY = 0.30 # train mode is supervised, so we accept a bit more
-SUGGEST_MERGE = 0.28          # cross-similarity above this = "might be the same person"
+SUGGEST_MERGE = 0.45          # cross-similarity above this = "might be the same person"
 AUTO_MAX_SIM = 0.80           # auto-learning skips photos this similar to one we already have
 TRAIN_MODE_MAX_SIM = 0.88     # train mode is a bit more generous (slow head turns change little per frame)
 # Walk-by enrollment: a passer-by is often blurry in every frame. If the same unknown face
@@ -500,6 +500,7 @@ class FaceEngine:
         for i, pid in enumerate(self.gal_ids):
             groups.setdefault(pid, []).append(i)
         pids = list(groups)
+        names = {r["id"]: (r["name"] or "").strip().lower() for r in self.db._run("SELECT id, name FROM people", fetch="all")}
         sims = self.gal_mat @ self.gal_mat.T
         out = []
         for i in range(len(pids)):
@@ -507,6 +508,9 @@ class FaceEngine:
                 key = tuple(sorted((pids[i], pids[j])))
                 if key in self.dismissed:
                     continue
+                na, nb = names.get(pids[i]), names.get(pids[j])
+                if na and nb and na != nb:
+                    continue   # you named them differently: they're different people
                 s = float(sims[np.ix_(groups[pids[i]], groups[pids[j]])].max())
                 if s >= SUGGEST_MERGE:
                     out.append({"a": key[0], "b": key[1], "sim": round(s, 3)})

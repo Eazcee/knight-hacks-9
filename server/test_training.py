@@ -154,5 +154,29 @@ check(html.status_code == 200 and "BEACON" in html.text, "dashboard served")
 st = c.get("/state").json()
 check("train" in st and "n_suggestions" in st and st["people"][0]["photo"], "state has photos, training, suggestions")
 
+# 8. drag-merge with undo, smarter suggestions, building names
+frame(group)
+ppl = c.get("/people").json()
+a, b = ppl[0], ppl[1]
+c.post(f"/people/{a['id']}", json={"name": "Alpha"})
+na, nb = a["n_train"], b["n_train"]
+r = c.post(f"/people/{b['id']}/merge", json={"into": a["id"]}).json()
+check(r["undo"] and c.get(f"/people/{b['id']}").status_code == 404, f"merged {r['src_name']} into {r['dst_name']}")
+r2 = c.post(f"/undo/{r['undo']}").json()
+back = {p["id"]: p for p in c.get("/people").json()}
+check(r2["ok"] and b["id"] in back and back[b["id"]]["n_train"] == nb and back[a["id"]]["n_train"] == na and back[a["id"]]["name"] == "Alpha",
+      "undo puts both people back exactly")
+check(c.post(f"/undo/{r['undo']}").status_code == 404, "can't undo twice")
+tp = c.get(f"/people/{a['id']}/photos").json()["training"]
+moved = c.post(f"/train_photos/{tp[0]['id']}/move", json={"to": "new"}).json()["person_id"]
+check(any({s["a"]["id"], s["b"]["id"]} == {a["id"], moved} for s in c.get("/suggestions").json()), "unnamed split is suggested as a merge")
+c.post(f"/people/{moved}", json={"name": "Bravo"})
+server._sugg_cache["t"] = 0
+check(not any({s["a"]["id"], s["b"]["id"]} == {a["id"], moved} for s in c.get("/suggestions").json()), "two different names are never suggested")
+server.settings["google_maps_key"] = "test"
+server.poi_cache["28.6024,-81.2000"] = "Harris Engineering Center"
+check(server._place_near(28.60241, -81.20012) == "Harris Engineering Center", "nearest building name from Places")
+server.settings["google_maps_key"] = ""
+
 print(f"\n{'ALL PASSED' if not fails else str(fails) + ' FAILED'} in {time.time() - t0:.1f}s")
 sys.exit(1 if fails else 0)

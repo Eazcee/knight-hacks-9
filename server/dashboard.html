@@ -147,6 +147,12 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .grp-faces img{width:40px;height:40px;border-radius:50%;object-fit:cover;border:3px solid #ef4444;background:#0b0d10;display:block;margin:0 auto}
 .grp-faces .f.met img{border-color:#4cc38a}
 .grp-faces small{display:block;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.amber-h{display:flex;align-items:center;gap:10px;margin:0 0 6px;font-size:18px;font-weight:700}
+.amber-badge{background:#f59e0b;color:#1a1200;padding:3px 10px;border-radius:6px;font-weight:800;letter-spacing:1px}
+.amber-grid{display:grid;grid-template-columns:120px 1fr;gap:14px;margin-top:14px;align-items:start}
+.amber-photo{width:120px;height:150px;border:2px dashed #4b5563;border-radius:10px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer;background:#0b0d10 center/cover no-repeat;color:var(--muted)}
+.amber-photo input{display:none}
+#undoBar{position:fixed;left:20px;bottom:20px;background:#1d2229;border:1px solid var(--line);border-radius:10px;padding:10px 14px;display:none;align-items:center;gap:12px;z-index:61;box-shadow:0 6px 20px rgba(0,0,0,.5)}
 .wl{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:8px;background:var(--panel2)}
 .wl img{width:52px;height:52px;border-radius:10px;object-fit:cover;background:#0b0d10}
 .wl.in_view{border-color:#ef4444;background:#2a1414;animation:wpulse 1.2s infinite}
@@ -162,9 +168,6 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
   <h1>BEACON</h1>
   <div class="chips" id="chips"></div>
   <div class="spacer"></div>
-  <button onclick="openTrainNew()">+ Train new person</button>
-  <button onclick="$('scanFile').click()" title="Run a big photo through Scan (what a 12 MP glasses photo does)">Scan a photo</button>
-  <input type="file" id="scanFile" accept="image/*" style="display:none" onchange="scanPhoto(this)">
   <button class="danger" onclick="deleteAll()">Delete all</button>
 </header>
 
@@ -237,6 +240,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
   <button class="nav r" onclick="lbStep(1)">›</button>
 </div>
 <div class="toast" id="toast"></div>
+<div id="undoBar"><span id="undoTxt"></span><button class="primary" id="undoBtn">Undo</button><button class="ghost" onclick="$('undoBar').style.display='none'">✕</button></div>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -246,6 +250,11 @@ async function api(url,opt={}){
   const r=await fetch(url,opt);let d=null;try{d=await r.json()}catch(e){}
   if(!r.ok){toast((d&&d.detail)||('Error '+r.status));throw new Error(r.status)}
   return d;
+}
+function showUndo(text,token){
+  const bar=$('undoBar');$('undoTxt').textContent=text;bar.style.display='flex';clearTimeout(bar._h);
+  $('undoBtn').onclick=async()=>{bar.style.display='none';try{await api('/undo/'+token,{method:'POST'});toast('Undone');lastPeopleKey='';loadSuggestions();tick()}catch(e){}};
+  bar._h=setTimeout(()=>bar.style.display='none',20000);
 }
 function toast(msg,ms=2600){const t=$('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',ms)}
 const qColor=q=>q>=.65?'#4cc38a':q>=.45?'#f5a524':'#ef4444';
@@ -345,7 +354,6 @@ function wireDnD(){
     c.addEventListener('drop',async e=>{e.preventDefault();e.stopPropagation();c.classList.remove('over');
       const src=e.dataTransfer.getData('text/plain'),dst=c.dataset.pid;if(!src||src===dst)return;
       const a=S.people.find(p=>p.id===src),b=S.people.find(p=>p.id===dst);
-      if(!confirm(`Same person? "${a&&a.name||'Unknown'}" will be merged into "${b&&b.name||'Unknown'}": photos, sightings and notes move over and recognition learns from both.`))return;
       await merge(src,dst)});
   });
   document.querySelectorAll('#people .cat').forEach(sec=>{
@@ -395,7 +403,8 @@ async function merge(a,b){
   // keep the one with a name, or the one with more photos
   const pa=S.people.find(p=>p.id===a),pb=S.people.find(p=>p.id===b);
   let src=a,dst=b;if(pa&&pb&&((pa.name&&!pb.name)||(!pa.name===!pb.name&&(pa.n_train||0)>(pb.n_train||0)))){src=b;dst=a}
-  await api(`/people/${src}/merge`,{method:'POST',json:{into:dst}});toast('Merged');lastPeopleKey='';loadSuggestions();
+  let r;try{r=await api(`/people/${src}/merge`,{method:'POST',json:{into:dst}})}catch(e){return}
+  showUndo(`Merged ${r.src_name} into ${r.dst_name}`,r.undo);lastPeopleKey='';loadSuggestions();tick();
   if(personOpen)openPerson(dst);
 }
 
@@ -459,25 +468,31 @@ async function markAlert(pid){const l=prompt('Alert label (e.g. "AMBER Alert · 
 async function openTrainNew(){const n=prompt('Name of the person to train (they should face the glasses):');if(n===null)return;
   await api('/train/start',{method:'POST',json:{name:n,seconds:20,goal:10}});toast('Training '+(n||'new person'))}
 function openAlert(){
-  $('alertModal').innerHTML=`<button class="close" onclick="closeAlert()">Close</button><h3 style="margin-top:0">Load an alert photo</h3>
-  <small>A missing-person photo. Beacon checks whether the glasses have already seen them, and alerts the wearer if they appear.</small>
-  <div style="margin-top:12px"><small>Label</small><input id="aLabel" value="AMBER Alert · "></div>
-  <div style="margin-top:10px"><input type="file" id="aFile" accept="image/*"></div>
-  <div class="row" style="margin-top:12px"><button class="primary" onclick="sendAlert()">Check &amp; start watching</button></div>
+  $('alertModal').innerHTML=`<button class="close" onclick="closeAlert()">Close</button>
+  <div class="amber-h"><span class="amber-badge">AMBER ALERT</span><span>Missing person</span></div>
+  <small class="muted">Beacon checks whether your glasses have already passed this person (where and when), then alerts the glasses the moment they appear.</small>
+  <div class="amber-grid">
+    <label class="amber-photo" id="aPhotoBox"><input type="file" id="aFile" accept="image/*" onchange="previewAlert(this)"><span id="aPhotoTxt">+ Photo<br><small>required</small></span></label>
+    <div>
+      <small>Full name <b style="color:#ff8a8a">*</b></small><input id="aName" placeholder="e.g. Maya Johnson" autocomplete="off">
+      <div class="row" style="margin-top:8px;flex-wrap:nowrap">
+        <div style="width:90px"><small>Age</small><input id="aAge" placeholder="7"></div>
+        <div style="flex:1"><small>Description / last seen wearing</small><input id="aDesc" placeholder="red hoodie, blue backpack"></div>
+      </div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px"><button class="primary" style="background:#ef4444;border-color:#ef4444;color:#fff" onclick="sendAlert()">Issue alert &amp; check sightings</button></div>
   <div id="aResult" style="margin-top:14px"></div>`;
-  $('alertOverlay').classList.add('open');
+  $('alertOverlay').classList.add('open');setTimeout(()=>$('aName').focus(),50);
 }
+function previewAlert(inp){const f=inp.files[0];if(!f)return;const u=URL.createObjectURL(f);
+  $('aPhotoBox').style.backgroundImage=`url('${u}')`;$('aPhotoTxt').style.display='none'}
 function closeAlert(){$('alertOverlay').classList.remove('open')}
-async function scanPhoto(inp){
-  const f=inp.files[0];inp.value='';if(!f)return;toast('Scanning…');
-  const fd=new FormData();fd.append('image',f);
-  let r;try{r=await api('/scan',{method:'POST',body:fd})}catch(e){return}
-  toast(`${r.display.title} · ${r.display.lines.join(' · ')} (${r.size[0]}×${r.size[1]}, ${(r.ms/1000).toFixed(1)} s)`,9000);
-  tick();
-}
 async function sendAlert(){
-  const f=$('aFile').files[0];if(!f){toast('Pick a photo first');return}
-  const fd=new FormData();fd.append('image',f);fd.append('label',$('aLabel').value||'ALERT');
+  const name=$('aName').value.trim(),f=$('aFile').files[0];
+  if(!name){toast('Enter the person\'s name');$('aName').focus();return}
+  if(!f){toast('Add a photo of them');return}
+  const fd=new FormData();fd.append('image',f);fd.append('name',name);fd.append('age',$('aAge').value.trim());fd.append('description',$('aDesc').value.trim());
   let r;try{r=await api('/watch',{method:'POST',body:fd})}catch(e){return}
   const last=r.last;
   $('aResult').innerHTML=r.seen_before&&last?`<div class="banner" style="background:#2a1414;border-color:#6b2a2a;flex-wrap:wrap">
@@ -644,7 +659,9 @@ function drawMap(){
   const m=S.map,pos=m.position;
   if(pos.lat==null){$('mapMsg').style.display='block';$('mapMsg').textContent='Waiting for GPS from the phone…';}
   else{$('mapMsg').style.display=pos.quality==='good'?'none':'block';$('mapMsg').textContent=pos.quality==='rough'?`GPS rough (±${Math.round(pos.acc)} m) — map building paused`:pos.quality==='dr'?'No good GPS: counting steps':'';}
-  $('mapInfo').textContent=pos.lat==null?'':`±${Math.round(pos.acc||0)} m · heading ${pos.heading!=null?Math.round(pos.heading)+'° ('+pos.heading_src+')':'unknown'} · ${m.nodes.length} places · ${m.pins.length} on map`;
+  const info=[];if(m.near)info.push('near '+m.near);if(m.poi_status&&m.poi_status!=='ok')info.push('⚠ '+m.poi_status.split(':')[0]);
+  if(pos.lat!=null)info.push(`±${Math.round(pos.acc||0)} m · heading ${pos.heading!=null?Math.round(pos.heading)+'° ('+pos.heading_src+')':'unknown'} · ${m.nodes.length} places · ${m.pins.length} on map`);
+  $('mapInfo').textContent=info.join(' · ');
   const keep=new Set();
   // you
   if(pos.lat!=null){

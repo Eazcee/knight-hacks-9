@@ -159,8 +159,11 @@ x1, y1, x2, y2 = f["box"]
 w, h = x2 - x1, y2 - y1
 alert_photo = cv2.flip(group[max(0, y1 - h):y2 + h, max(0, x1 - w):x2 + w], 1)
 r = c.post("/watch", files={"image": ("alert.jpg", jpg(alert_photo), "image/jpeg")},
-           data={"label": "AMBER Alert · Maya · 7"}).json()
+           data={"name": "Maya", "age": "7", "description": "red hoodie"}).json()
 check(r["seen_before"] and r["person_id"] == pid0, "alert photo matched someone we already saw")
+w = c.get("/state").json()["watchlist"]
+check(w and w[0]["watch_label"] == "AMBER Alert · Maya, 7" and "red hoodie" in w[0]["notes"], f"watchlist: {w[0]['watch_label'] if w else None}")
+check(c.post("/watch", files={"image": ("a.jpg", jpg(alert_photo), "image/jpeg")}, data={"name": " "}).status_code == 400, "alert needs a name")
 check(r["last"] and r["last"]["place"] == "Coffee Station", f"last seen at {r['last']['place'] if r['last'] else None}")
 route = r["route"]
 check(route["ok"] and route["mode"] == "graph" and route["path"][0] == nA and nB in route["path"],

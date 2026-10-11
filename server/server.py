@@ -74,6 +74,7 @@ frame_count = 0
 dropped = 0
 hold = {"until": 0.0, "display": None}
 card_hold = {"card": None, "ts": 0.0}
+undo_log = {}                # token -> merge snapshot
 last_shown = {"card": None, "ts": 0.0}   # last non-empty card, for the dashboard's glasses preview   # keep a scan result on the glasses for a few seconds
 last_scan = None
 pipeline_lock = threading.Lock()   # one frame at a time; extra frames are dropped, not queued
@@ -126,6 +127,73 @@ def _url(path):
 
 
 _nodes_cache = {"t": 0.0, "nodes": []}
+POI_PATH = os.path.join(DATA, "poi_cache.json")
+try:
+    with open(POI_PATH, encoding="utf-8") as _f:
+        poi_cache = json.load(_f)
+except (OSError, ValueError):
+    poi_cache = {}
+poi_state = {"pending": set(), "status": None, "retry_at": 0.0}
+POI_MONTHLY_CAP = int(os.environ.get("BEACON_POI_CAP", 3000))   # stay well under Google's free 5,000/month
+SKIP_TYPES = {"route", "street_address", "intersection", "plus_code", "political", "locality", "postal_code"}
+
+
+def _poi(lat, lng):
+    """Name of the building / business you're at (e.g. 'McDonald's', 'Harris Engineering Center'),
+    from Google Places Nearby Search with the saved Maps key. Cached per ~11 m cell; looked up in
+    the background, so the first call returns None and later calls return the name."""
+    key = settings.get("google_maps_key")
+    if lat is None or not key:
+        return None
+    # one lookup per ~45 m square (the search covers 60 m around it), cached on disk forever
+    g = 0.0004
+    clat, clng = round(lat / g) * g, round(lng / g) * g
+    k = f"{clat:.4f},{clng:.4f}"
+    if k in poi_cache:
+        return poi_cache[k] or None
+    month = time.strftime("%Y-%m")
+    used = poi_cache.get("_calls", {}).get(month, 0)
+    if used >= POI_MONTHLY_CAP:
+        poi_state["status"] = f"monthly cap reached ({used} lookups)"
+        return None
+    if k not in poi_state["pending"] and time.time() >= poi_state["retry_at"] and len(poi_state["pending"]) < 4:
+        poi_state["pending"].add(k)
+        poi_cache.setdefault("_calls", {})[month] = used + 1
+        threading.Thread(target=_poi_fetch, args=(k, clat, clng, key), daemon=True).start()
+    return None
+
+
+def _poi_fetch(k, lat, lng, key):
+    import urllib.error
+    import urllib.request
+    body = json.dumps({"maxResultCount": 8, "rankPreference": "DISTANCE",
+                       "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": 60.0}}})
+    req = urllib.request.Request("https://places.googleapis.com/v1/places:searchNearby", data=body.encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "X-Goog-Api-Key": key,
+                                          "X-Goog-FieldMask": "places.displayName,places.types,places.location"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        name = ""
+        for pl in data.get("places", []):
+            if set(pl.get("types", [])) & SKIP_TYPES:
+                continue
+            name = (pl.get("displayName") or {}).get("text", "")
+            if name:
+                break
+        poi_cache[k] = name
+        poi_state["status"] = "ok"
+        with open(POI_PATH, "w", encoding="utf-8") as f:
+            json.dump(poi_cache, f)
+    except urllib.error.HTTPError as e:
+        msg = e.read().decode(errors="ignore")[:300]
+        poi_state["status"] = ("Places API (New) isn't enabled for this key" if e.code == 403 else f"Places error {e.code}") + ": " + msg
+        poi_state["retry_at"] = time.time() + 60
+    except Exception as e:
+        poi_state["status"] = f"Places lookup failed: {e}"
+        poi_state["retry_at"] = time.time() + 30
+    finally:
+        poi_state["pending"].discard(k)
 
 
 def _place_near(lat, lng, radius=40.0):
@@ -140,7 +208,7 @@ def _place_near(lat, lng, radius=40.0):
             d = haversine_m(lat, lng, n["lat"], n["lng"])
             if d <= bd:
                 best, bd = n["name"], d
-    return best
+    return best or _poi(lat, lng)   # a place you named wins; else the building you're at
 
 
 def _meet(pid, row=None):
@@ -572,10 +640,26 @@ async def merge_person(pid: str, request: Request):
     """This person is actually `into`: move all their photos and sightings there."""
     body = await request.json()
     into = body.get("into")
-    if not db.merge_people(pid, into):
+    snap = db.merge_people(pid, into)
+    if not snap:
         raise HTTPException(400, "can't merge those two")
     faces._reload_gallery()
-    return {"ok": True, "person_id": into}
+    token = uuid.uuid4().hex[:10]
+    undo_log[token] = snap
+    while len(undo_log) > 20:
+        undo_log.pop(next(iter(undo_log)))
+    return {"ok": True, "person_id": into, "undo": token,
+            "src_name": snap["src"]["name"] or "Unknown", "dst_name": snap["dst"]["name"] or "Unknown"}
+
+
+@app.post("/undo/{token}")
+def undo(token: str):
+    """Undo a merge (the dashboard's Undo button)."""
+    snap = undo_log.pop(token, None)
+    if not snap or not db.undo_merge(snap):
+        raise HTTPException(404, "nothing to undo")
+    faces._reload_gallery()
+    return {"ok": True, "person_id": snap["src"]["id"]}
 
 
 @app.get("/people/{pid}/sightings")
@@ -713,11 +797,17 @@ def train_status():
 
 # ---------------------------------------------------------------- watchlist (alerts)
 @app.post("/watch")
-async def watch(image: UploadFile = File(...), label: str = Form("ALERT"), name: str = Form(None)):
-    """Load an alert photo. Returns whether we've ALREADY seen this person, where and when,
-    plus a route to that last sighting. From now on, seeing them triggers an alert."""
+async def watch(image: UploadFile = File(...), name: str = Form(...), age: str = Form(""),
+                description: str = Form(""), label: str = Form("")):
+    """Load an AMBER-style alert: the person's name, photo, and optionally age and description.
+    Returns whether we've ALREADY seen them, where and when, plus a route to that last sighting.
+    From now on, seeing them triggers an alert on the glasses."""
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(400, "the person's name is required")
+    label = label.strip() or f"AMBER Alert · {name}" + (f", {age.strip()}" if age.strip() else "")
     img = _decode(await image.read())
-    r = faces.enroll_image(img, name=name, is_watch=1, watch_label=label)
+    r = faces.enroll_image(img, name=name, notes=description.strip(), is_watch=1, watch_label=label)
     if not r:
         raise HTTPException(422, "no face found in alert photo")
     pid = r["person_id"]
@@ -1143,7 +1233,8 @@ def state():
         "watchlist": _watchlist(public),
         "last_shown": {**last_shown, "ago": _ago(last_shown["ts"]) if last_shown["ts"] else None},
         "sightings": [_sighting_public(s) for s in db.sightings(limit=30)],
-        "map": {**geo.state(), "pins": _pins(public)},
+        "map": {**geo.state(), "pins": _pins(public), "near": _poi(geo.lat, geo.lng),
+                "poi_status": poi_state["status"] if settings.get("google_maps_key") else None},
         "settings": settings,
         "alerts": alerts()[:10],
         "display": last_display,

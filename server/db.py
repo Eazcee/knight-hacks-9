@@ -141,10 +141,14 @@ class DB:
         self._run("DELETE FROM people WHERE id=?", (pid,))
 
     def merge_people(self, src, dst):
-        """Fold person `src` into `dst`: all training photos and sightings move over."""
+        """Fold person `src` into `dst`: all training photos and sightings move over.
+        Returns a snapshot that undo_merge() can restore, or False."""
         a, b = self.person(src), self.person(dst)
         if not a or not b or src == dst:
             return False
+        snap = {"src": a, "dst": b,
+                "emb": [r["id"] for r in self._run("SELECT rowid AS id FROM embeddings WHERE person_id=?", (src,), fetch="all")],
+                "sig": [r["id"] for r in self._run("SELECT id FROM sightings WHERE person_id=?", (src,), fetch="all")]}
         fields = {}
         if not b["name"] and a["name"]:
             fields["name"] = a["name"]
@@ -157,6 +161,21 @@ class DB:
         self._run("UPDATE embeddings SET person_id=? WHERE person_id=?", (dst, src))
         self._run("UPDATE sightings SET person_id=? WHERE person_id=?", (dst, src))
         self._run("DELETE FROM people WHERE id=?", (src,))
+        return snap
+
+    def undo_merge(self, snap):
+        """Put a merged person back exactly as they were."""
+        a, b = snap["src"], snap["dst"]
+        if self.person(a["id"]) or not self.person(b["id"]):
+            return False
+        cols = list(a.keys())
+        self._run(f"INSERT INTO people ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", tuple(a[c] for c in cols))
+        bcols = [c for c in b.keys() if c != "id"]
+        self._run(f"UPDATE people SET {', '.join(c + '=?' for c in bcols)} WHERE id=?", (*[b[c] for c in bcols], b["id"]))
+        for eid in snap["emb"]:
+            self._run("UPDATE embeddings SET person_id=? WHERE rowid=?", (a["id"], eid))
+        for sid in snap["sig"]:
+            self._run("UPDATE sightings SET person_id=? WHERE id=?", (a["id"], sid))
         return True
 
     def prune_anonymous(self, older_than_s):

@@ -109,10 +109,11 @@ def face_quality(img, box, kps, det):
 
 
 class FaceEngine:
-    def __init__(self, db, crops_dir="data/crops", auto_enroll=True):
+    def __init__(self, db, crops_dir="data/crops", auto_enroll=True, media=None):
         from insightface.app import FaceAnalysis  # imported here so the server starts fast
 
         self.db = db
+        self.media = media
         self.crops_dir = crops_dir
         os.makedirs(crops_dir, exist_ok=True)
         self.auto_enroll = auto_enroll
@@ -170,7 +171,11 @@ class FaceEngine:
         return eid
 
     def _remove_from_gallery(self, eid):
+        embedding = self.db.embedding(eid)
         self.db.delete_embedding(eid)
+        if (self.media and embedding and embedding.get("crop")
+                and not self.db.media_path_is_referenced(embedding["crop"])):
+            self.media.delete(embedding["crop"])
         self._reload_gallery()
 
     def match(self, emb):
@@ -532,5 +537,7 @@ class FaceEngine:
         mx, my = int((x2 - x1) * 0.4), int((y2 - y1) * 0.4)
         crop = img[max(0, y1 - my):min(h, y2 + my), max(0, x1 - mx):min(w, x2 + mx)]
         path = os.path.join(self.crops_dir, f"{name}.jpg")
-        cv2.imwrite(path, crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if self.media is None:
+            raise RuntimeError("FaceEngine requires Neon Object Storage")
+        self.media.put_image(path, crop, quality=92)
         return path

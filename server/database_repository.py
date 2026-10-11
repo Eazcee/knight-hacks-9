@@ -262,6 +262,28 @@ class DatabaseRepository:
     def delete_sighting(self, sid):
         self._run("DELETE FROM sightings WHERE id=?", (sid,))
 
+    def media_paths(self):
+        """Every object-storage path currently referenced by application data."""
+        rows = self._run(
+            "SELECT crop AS path FROM people WHERE crop IS NOT NULL"
+            " UNION SELECT crop FROM embeddings WHERE crop IS NOT NULL"
+            " UNION SELECT crop FROM sightings WHERE crop IS NOT NULL"
+            " UNION SELECT frame FROM sightings WHERE frame IS NOT NULL"
+            " UNION SELECT keyframe FROM nodes WHERE keyframe IS NOT NULL",
+            fetch="all",
+        )
+        return [row["path"] for row in rows if row["path"]]
+
+    def media_path_is_referenced(self, path):
+        row = self._run(
+            "SELECT EXISTS(SELECT 1 FROM people WHERE crop=?"
+            " UNION ALL SELECT 1 FROM embeddings WHERE crop=?"
+            " UNION ALL SELECT 1 FROM sightings WHERE crop=? OR frame=?"
+            " UNION ALL SELECT 1 FROM nodes WHERE keyframe=?) AS found",
+            (path, path, path, path, path), fetch="one",
+        )
+        return bool(row and row["found"])
+
     def last_sighting(self, pid, before_ts=None):
         if before_ts is None:
             return self._run(

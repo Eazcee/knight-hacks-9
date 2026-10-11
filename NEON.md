@@ -49,14 +49,17 @@ Use the pooled `DATABASE_URL` for the application and the direct
 
 - `server/database_repository.py` — shared Beacon data operations
 - `server/neon_database.py` — Psycopg and pgvector implementation
+- `server/media_storage.py` — private Neon Object Storage client
 - `server/database_config.py` — required connection configuration
 - `server/migrate.py` — migration runner
 - `server/migrations/` — versioned Postgres schema
 - `neon.ts` — Neon service policy, including the private bucket
 
-JPEG crops, frames, and keyframes still live under `server/data/`. The private
-bucket is provisioned and verified, but wiring those files into Object Storage
-is the next storage task.
+JPEG crops, sighting frames, and keyframes are stored in the private
+`recall-images` bucket and served by the backend using server-side storage
+credentials. If upgrading a checkout that already has local images, run
+`python backfill_media.py` from `server/` on the computer that holds its
+`data/` directory.
 
 ## Testing safety
 

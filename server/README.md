@@ -42,6 +42,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python migrate.py
+python backfill_media.py  # once, only if upgrading existing local images
 uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 The server requires the Neon `DATABASE_URL` and `DATABASE_URL_UNPOOLED` values
@@ -158,4 +159,4 @@ Say on stage: strangers are kept as anonymous ids only, un-annotated ones expire
 ## 6. Files
 - `server.py` — API · `dashboard.html` — the big-screen dashboard (Leaflet in `static/`) · `faces.py` — recognition + training sets · `geo.py` — GPS, walk graph, A*, turn-by-turn · `database_repository.py` + `neon_database.py` — Neon Postgres and pgvector
 - `sim_walk.py` — fake GPS walk for rehearsals · `webcam_client.py` — frames from webcam/video · `test_demo.py`, `test_training.py`, `test_range.py` — all should say `ALL PASSED`
-- `data/` — local face crops, frames, and settings (created on first run); application records live in Neon
+- `data/` — local runtime settings/model marker; image media lives in the private Neon bucket and application records live in Neon Postgres

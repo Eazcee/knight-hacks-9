@@ -33,51 +33,46 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 .panel h2{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:0 0 10px;font-weight:600;display:flex;align-items:center;gap:8px}
 .panel h2 .right{margin-left:auto;display:flex;gap:6px}
 .top{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px}
-.svpanel{outline:none}
-.svwrap{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 300px;height:min(64vh,620px);background:#05070a;border-radius:10px;overflow:hidden;border:1px solid #1b222c}
-.svpanel.big .svwrap{height:82vh}
+.svstrip{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;min-height:60px}
+.svstrip .th{flex:none;width:68px;height:120px;border-radius:8px;background:#000 center/cover no-repeat;cursor:pointer;position:relative;border:1px solid #1f2731}
+.svstrip .th:hover{outline:2px solid #3b82f6}
+.svstrip .th.p{border:2px solid #4cc38a}
+.svstrip .th span{position:absolute;left:0;right:0;bottom:0;font-size:10px;padding:8px 4px 3px;background:linear-gradient(transparent,rgba(0,0,0,.85));color:#e5e7eb;border-radius:0 0 8px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.svstrip-empty{color:var(--muted);font-size:13px;align-self:center}
+.svov{position:fixed;inset:0;z-index:18;background:#05070a;display:none;flex-direction:column;outline:none}
+.svov.open{display:flex}
+body.svopen main,body.svopen header{visibility:hidden}
+.svbar{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid #1b222c;background:#0b0e12;font-size:14px;min-height:56px}
+.svbar .title{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:600}
+.svbar .when{font-size:18px;font-weight:700}
+.svbar a{color:#93c5fd;cursor:pointer}
+.svbar .exit{font-size:15px;padding:8px 16px}
+.svbody{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 320px;min-height:0}
 .svstage{position:relative;overflow:hidden;background:#000}
 .svstage img.svl{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transition:opacity .3s ease,transform .3s ease;will-change:opacity,transform}
 .svstage img.svl.fast{transition-duration:.13s}
 #svBoxes{position:absolute;pointer-events:none;z-index:3}
 #svBoxes .bx{position:absolute;border:2px solid #4cc38a;border-radius:6px;box-shadow:0 0 0 1px rgba(0,0,0,.45);pointer-events:auto;cursor:pointer}
 #svBoxes .bx.watch{border-color:#ef4444}#svBoxes .bx.seen{border-color:#f59e0b}
-#svBoxes .bx span{position:absolute;left:-2px;bottom:100%;margin-bottom:3px;background:rgba(10,12,16,.88);color:#fff;font-size:12px;padding:1px 7px;border-radius:6px;white-space:nowrap}
-#svArrows{position:absolute;left:50%;bottom:92px;width:0;height:0;z-index:4}
-#svArrows .ar{position:absolute;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;background:rgba(255,255,255,.16);border:1.5px solid rgba(255,255,255,.65);display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background .15s,transform .15s;box-shadow:0 2px 10px rgba(0,0,0,.5)}
-#svArrows .ar:hover{background:rgba(59,130,246,.6);transform:scale(1.08)}
-#svArrows .ar svg{width:26px;height:26px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.6))}
-#svArrows .ar.jn{border-color:#4cc38a;background:rgba(76,195,138,.25)}
-#svArrows .ar .t{position:absolute;top:100%;margin-top:5px;font-size:11px;white-space:nowrap;background:rgba(0,0,0,.7);padding:1px 6px;border-radius:5px;opacity:0;transition:opacity .15s;pointer-events:none}
-#svArrows .ar:hover .t{opacity:1}
-.svtop{position:absolute;left:0;right:0;top:0;padding:10px 12px 18px;background:linear-gradient(rgba(0,0,0,.78),transparent);display:flex;gap:10px;align-items:baseline;font-size:13px;color:#e5e7eb;flex-wrap:wrap;z-index:5}
-.svtop b{font-size:15px}.svtop a{color:#93c5fd;cursor:pointer}
-.svtop .tag{border-radius:6px;padding:1px 7px;font-size:12px;background:#1f2937;border:1px solid #3a4250}
-.svtop .tag.st{border-color:#f59e0b;color:#fde68a}.svtop .tag.person{background:#14532d;border-color:#166534;color:#bbf7d0}.svtop .tag.alert{background:#7f1d1d;border-color:#991b1b;color:#fecaca}
-.svtools{position:absolute;left:10px;bottom:10px;right:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;z-index:5}
-.svtools button{font-size:12px;padding:5px 9px;background:rgba(14,16,19,.85)}
-.svtools button.on{border-color:#f59e0b;color:#fde68a}
-.svside{display:flex;flex-direction:column;border-left:1px solid #1b222c;min-height:0;background:#0b0e12}
-#svMap{width:100%;height:56%;display:block;cursor:crosshair;flex:none}
-.svlist{flex:1;overflow:auto;padding:6px 10px 10px;border-top:1px solid #1b222c;font-size:12px}
-.svlist h4{margin:8px 0 4px;font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:600}
-.svlist .pp{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:8px;cursor:pointer}
-.svlist .pp:hover,.svlist .wk:hover{background:#151b23}
-.svlist .pp img{width:28px;height:28px;border-radius:50%;object-fit:cover;background:#222;flex:none}
-.svlist .wk{display:flex;justify-content:space-between;gap:8px;padding:3px 4px;border-radius:8px;cursor:pointer;color:#cbd5e1}
-.svlist .wk.cur{background:#132033;color:#93c5fd}
-.svtime{display:flex;align-items:center;gap:10px;margin-top:8px}
-.svticks{position:relative;height:7px;margin-top:1px}
+#svBoxes .bx span{position:absolute;left:-2px;bottom:100%;margin-bottom:3px;background:rgba(10,12,16,.88);color:#fff;font-size:13px;padding:1px 8px;border-radius:6px;white-space:nowrap}
+.svnav{position:absolute;top:50%;transform:translateY(-50%);z-index:5;height:110px;padding:0 18px;font-size:16px;font-weight:600;background:rgba(14,16,19,.75);border:1px solid #3a4250;border-radius:14px;color:#e5e7eb;display:flex;align-items:center;gap:8px;cursor:pointer}
+.svnav:hover{background:rgba(59,130,246,.6)}
+.svnav.l{left:16px}.svnav.r{right:16px}
+.svnav[disabled]{opacity:.25;pointer-events:none}
+.svnav b{font-size:34px;line-height:1;font-weight:400}
+.svside{border-left:1px solid #1b222c;background:#0b0e12;overflow:auto;padding:12px}
+.svside h4{margin:2px 4px 10px;font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:600}
+.svp{display:flex;align-items:center;gap:10px;padding:6px;border-radius:10px;cursor:pointer}
+.svp:hover{background:#151b23}.svp.cur{background:#132033}
+.svp .face{width:44px;height:44px;border-radius:50%;background:#222 no-repeat;flex:none;border:2px solid #4cc38a}
+.svp .face.watch{border-color:#ef4444}.svp .face.seen{border-color:#f59e0b}
+.svp .nm{font-weight:600;font-size:14px}.svp small{color:var(--muted);display:block}
+.svtime{display:flex;align-items:center;gap:12px;padding:10px 16px 14px;border-top:1px solid #1b222c;background:#0b0e12}
+.svticks{position:relative;height:7px;margin-top:2px}
 .svticks i{position:absolute;top:0;width:3px;height:7px;border-radius:2px;background:#4cc38a;transform:translateX(-1px)}
 .svticks i.alert{background:#ef4444}
 .svempty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);flex-direction:column;gap:6px;z-index:6;background:#05070a}
-.svfloors{display:flex;gap:4px;align-items:center}
-.svfloors button{padding:3px 8px;font-size:12px}
-.svfloors button.cur{border-color:#3b82f6;color:#93c5fd}
 .rec{color:#ef4444;font-weight:600}
-.peg{width:24px;height:24px;position:relative}
-.peg::after{content:'';position:absolute;left:4px;top:4px;width:12px;height:12px;border-radius:50%;background:#facc15;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.35)}
-.peg::before{content:'';position:absolute;left:5px;top:-11px;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:17px solid rgba(250,204,21,.8)}
 .obst{color:#f59e0b;font-weight:600}
 .live{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:9/16;max-height:420px;width:100%;display:flex;align-items:center;justify-content:center}
 .live img{width:100%;height:100%;object-fit:contain}
@@ -261,29 +256,10 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
       </div>
     </div>
 
-    <div class="panel svpanel" id="svpanel" tabindex="0">
+    <div class="panel" id="svpanel">
       <h2>Street view <span class="muted" id="svInfo" style="text-transform:none;letter-spacing:0;font-weight:400"></span>
-        <span class="right"><span class="svfloors" id="svFloors"></span><button class="ghost" id="svBigBtn" onclick="svBig()">⤢ Bigger</button></span></h2>
-      <div class="svwrap">
-        <div class="svstage" id="svStage">
-          <img class="svl" id="svA" alt=""><img class="svl" id="svB" alt="" style="opacity:0">
-          <div id="svBoxes"></div><div class="svtop" id="svTop"></div><div id="svArrows"></div>
-          <div class="svtools">
-            <button id="svPlayBtn" onclick="svPlay()" title="Replay the walk (space)">▶ Play</button>
-            <button onclick="svLatest()" title="Newest photo, and follow along as you walk">⌖ Live</button>
-            <button onclick="svNavHere()" title="The glasses guide you to where this photo was taken">📍 Navigate here</button>
-            <button onclick="svShowOnMap()" title="Center the big map on this photo">🗺 On map</button>
-            <button onclick="api('/shots/take',{method:'POST'}).then(()=>{toast('Photo saved');SV.follow=true;tick()}).catch(()=>{})" title="Take a photo right now">📷 Photo now</button>
-            <span class="spacer"></span>
-            <button id="svPauseBtn" onclick="svPause()" title="Stop taking photos (privacy)">⏸ Pause photos</button>
-            <button onclick="svDelete()" title="Delete this photo">🗑</button>
-          </div>
-          <div class="svempty" id="svEmpty"><b>No photos yet</b><small>Photos are taken while you walk (about one per meter), never while you stand.<br>Known people get a photo the moment they come into view.</small></div>
-        </div>
-        <div class="svside"><canvas id="svMap" title="Your walks on this floor · click to jump · wheel to zoom"></canvas><div class="svlist" id="svList"></div></div>
-      </div>
-      <div class="svtime"><small class="muted" id="svT0"></small><div style="flex:1"><input type="range" id="svTime" min="0" max="0" value="0" oninput="svScrub(+this.value)" style="width:100%"><div class="svticks" id="svTicks"></div></div><small class="muted" id="svT1"></small></div>
-      <small class="muted">Click the photo, then ↑ / → to walk forward and ↓ / ← back (hold to keep walking), space to play. Ground arrows: the way ahead and behind; green ones: another walk crosses here. Blue lines on the big map are your walks: click one to jump there. Names in the photo open the person; their card's 📷 brings you back here.</small>
+        <span class="right"><button class="primary" onclick="svOpen()">⤢ Open</button></span></h2>
+      <div class="svstrip" id="svStrip"></div>
     </div>
 
     <div id="searchPanel"></div>
@@ -298,8 +274,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 
     <div class="panel">
       <h2>Map <span class="muted" id="mapInfo" style="text-transform:none;letter-spacing:0;font-weight:400"></span><span class="right">
-        <button id="indoorBtn" onclick="toggleIndoors()" title="Indoors: ignore the phone's GPS; position = steps + the camera's turns (the compass only sets the start)">Indoors</button>
-        <button class="ghost" onclick="setFloor(-1)" title="Went down a floor">⬇</button><button class="ghost" id="floorBtn" onclick="setFloor(0)" title="Which floor you're on (click to type)">floor 1</button><button class="ghost" onclick="setFloor(1)" title="Went up a floor">⬆</button>
+        <button onclick="svFitPath()" title="Zoom the map to the path you walked today">🧭 Today's path</button>
         <button id="followBtn" onclick="toggleFollow()">Following</button>
         <button onclick="markPlace()" title="Name the spot you're standing at">Mark place here</button>
         <button onclick="api('/route',{method:'DELETE'}).then(()=>toast('Route cancelled'))">Cancel route</button>
@@ -391,168 +366,124 @@ function renderLive(){
   if(S.depth&&S.depth.obstacle&&S.depth.obstacle.blocked)lp.unshift('⚠ OBSTACLE AHEAD');
   $('liveInfo').textContent=lp.join(' · ');
 }
-// ---------------- street view: the photos of your walks, Street-View style
-// SV.items = every photo (oldest first) with lat/lng, heading, floor, walk, kind, people (+ boxes)
-const SV={items:[],byId:{},epoch:0,last:0,i:-1,front:'svA',play:null,follow:true,floorSel:null,origin:null,mapKey:'',lastKey:0,loading:false,span:80,listKey:''};
-const svLL=(lat,lng)=>{const o=SV.origin;return [(lng-o[1])*111320*Math.cos(o[0]*Math.PI/180),(lat-o[0])*110540]};
+// ---------------- street view: your day as photos. A strip on the dashboard; opens full screen (Exit / Esc to leave)
+const SV={items:[],byId:{},epoch:0,last:0,i:-1,front:'svA',loading:false,enc:[],encKey:'',open:false,stripKey:'',mapKey:'',mapIds:[],fitted:false};
 const svTime=ts=>new Date(ts*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
-const svDay=ts=>{const d=new Date(ts*1000),t=new Date();return d.toDateString()===t.toDateString()?'today':d.toLocaleDateString([],{month:'short',day:'numeric'})};
-const svAng=a=>((a%360)+540)%360-180;      // -180..180
+const svDay=ts=>{const d=new Date(ts*1000),t=new Date();return d.toDateString()===t.toDateString()?'today':d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})};
+const svM=(a,b)=>Math.hypot((b.lng-a.lng)*111320*Math.cos(a.lat*Math.PI/180),(b.lat-a.lat)*110540);
 async function svFetch(full){
   if(SV.loading)return false;SV.loading=true;
-  try{const r=await api(`/shots?epoch=${full?0:SV.epoch}&after=${SV.last}`);
-    const curId=SV.items[SV.i]&&SV.items[SV.i].id;
+  try{const r=await api(`/shots?epoch=${full?0:SV.epoch}&after=${SV.last}`);const curId=SV.items[SV.i]&&SV.items[SV.i].id;
     SV.items=r.full?r.shots:SV.items.concat(r.shots);SV.epoch=r.epoch;SV.last=SV.items.length?SV.items[SV.items.length-1].id:0;
-    if(!SV.origin){const g=SV.items.find(s=>s.lat!=null);if(g)SV.origin=[g.lat,g.lng]}
-    SV.byId={};SV.items.forEach((s,i)=>{SV.byId[s.id]=i;if(s.lat!=null&&SV.origin){const p=svLL(s.lat,s.lng);s._x=p[0];s._y=p[1]}});
-    if(curId!=null&&SV.byId[curId]!=null&&!SV.follow)SV.i=SV.byId[curId];
+    SV.byId={};SV.items.forEach((s,i)=>SV.byId[s.id]=i);if(curId!=null&&SV.byId[curId]!=null)SV.i=SV.byId[curId];
     return true}catch(e){return false}finally{SV.loading=false}
 }
 function renderStreet(){
   if(!S)return;
-  const stale=S.shots_epoch!==SV.epoch||S.n_shots!==SV.items.length;
-  if(stale&&!SV.loading)svFetch(S.shots_epoch!==SV.epoch).then(ok=>{if(!ok)return;
-    if(SV.follow||SV.i<0||SV.i>=SV.items.length)svShow(SV.items.length-1,SV.i<0?'jump':'fwd');else{svSide();svScrubber()}});
-  const pos=(S.map&&S.map.position)||{},walking=pos.walking&&!S.photos_paused;
-  const walks=new Set(SV.items.map(s=>s.walk)).size,floors=[...new Set(SV.items.map(s=>s.floor||1))].sort((a,b)=>a-b);
-  $('svInfo').innerHTML=`${S.n_shots||0} photo${S.n_shots===1?'':'s'} · ${walks} walk${walks===1?'':'s'}${S.photos_paused?' · <span class="rec">paused</span>':walking?' · <span class="rec">● recording</span>':' · stands still = no photos'}${pos.indoors?' · indoors'+(pos.indoors_auto?' (auto)':''):''} · floor ${pos.floor||1}${pos.barometer?'':' (no barometer: say "floor 2")'}`;
-  const pb=$('svPauseBtn');pb.textContent=S.photos_paused?'▶ Resume photos':'⏸ Pause photos';pb.classList.toggle('on',!!S.photos_paused);
-  const cur=SV.items[SV.i],cf=SV.floorSel??(cur?cur.floor||1:null);
-  const fk=floors.join(',')+'|'+cf;if($('svFloors')._k!==fk){$('svFloors')._k=fk;
-    $('svFloors').innerHTML=floors.length>1?'<small class="muted">floor</small>'+floors.map(f=>`<button class="ghost ${f===cf?'cur':''}" onclick="svFloor(${f})">${f}</button>`).join(''):''}
-  $('svEmpty').style.display=SV.items.length?'none':'flex';
+  if((S.shots_epoch!==SV.epoch||S.n_shots!==SV.items.length)&&!SV.loading)
+    svFetch(S.shots_epoch!==SV.epoch).then(ok=>{if(!ok)return;svStrip();if(SV.open){svEncounters();svPeople();svScrubber();svNavState();svCount()}});
+  const pos=(S.map&&S.map.position)||{};
+  $('svInfo').innerHTML=`${S.n_shots||0} photo${S.n_shots===1?'':'s'}${pos.walking?' · <span class="rec">● taking photos</span>':' · photos are taken while you walk'}`;
 }
-// ---- showing a photo, with a Street-View-like move: forward = zoom in + fade, back = zoom out, side = slide
+function svStrip(){
+  const n=SV.items.length,key=SV.epoch+':'+n;if(SV.stripKey===key)return;SV.stripKey=key;
+  if(!n){$('svStrip').innerHTML='<div class="svstrip-empty">Photos appear here as you walk (about one per meter). Click one to step through your day like Street View.</div>';return}
+  const from=Math.max(0,n-16);
+  $('svStrip').innerHTML=SV.items.slice(from).map((s,k)=>{const i=from+k,ppl=(s.people||[]).map(p=>p.name||'?').join(', ');
+    return `<div class="th ${ppl?'p':''}" style="background-image:url('/shots/${s.id}.jpg')" onclick="svOpen(${i})" title="${svTime(s.ts)}${ppl?' · '+esc(ppl):''}"><span>${ppl?esc(ppl):svTime(s.ts)}</span></div>`}).join('');
+  $('svStrip').scrollLeft=1e6;
+}
+// ---- open / close
+function svOpen(i){
+  if(!SV.items.length){toast('No photos yet: they are taken while you walk');return}
+  SV.open=true;$('svov').classList.add('open');document.body.style.overflow='hidden';document.body.classList.add('svopen');
+  svEncounters();svPeople();svScrubber();svShow(i==null?SV.items.length-1:i,'jump');setTimeout(()=>$('svov').focus(),30);
+}
+function svClose(){SV.open=false;$('svov').classList.remove('open');document.body.style.overflow='';document.body.classList.remove('svopen')}
+// ---- one photo, with a Street-View-like move: next = zoom in + fade, previous = zoom out
 function svShow(i,dir){
   if(!SV.items.length){$('svEmpty').style.display='flex';return}
-  i=Math.max(0,Math.min(SV.items.length-1,i));const it=SV.items[i],prev=SV.items[SV.i];SV.i=i;
+  $('svEmpty').style.display='none';
+  i=Math.max(0,Math.min(SV.items.length-1,i));const it=SV.items[i];SV.i=i;
   const fr=$(SV.front),bk=$(SV.front==='svA'?'svB':'svA'),src='/shots/'+it.id+'.jpg';
-  const fast=!!SV.play||(SV._lastMove&&Date.now()-SV._lastMove<260);SV._lastMove=Date.now();
+  const fast=SV._lastMove&&Date.now()-SV._lastMove<260;SV._lastMove=Date.now();
   const anim=dir&&dir!=='jump'&&fr.getAttribute('src');
   const go=()=>{if(SV.items[SV.i]!==it)return;
-    [fr,bk].forEach(e=>e.classList.toggle('fast',fast));
-    bk.style.transition='none';bk.style.opacity=anim?0:1;
-    bk.style.transform=!anim?'none':dir==='fwd'?'scale(.92)':dir==='back'?'scale(1.1)':`translateX(${dir==='right'?60:-60}px)`;
-    void bk.offsetWidth;bk.style.transition='';bk.style.opacity=1;bk.style.transform='none';bk.style.zIndex=2;
-    fr.style.zIndex=1;if(anim){fr.style.opacity=0;fr.style.transform=dir==='fwd'?'scale(1.14)':dir==='back'?'scale(.9)':`translateX(${dir==='right'?-60:60}px)`}else{fr.style.transition='none';fr.style.opacity=0;void fr.offsetWidth;fr.style.transition=''}
+    [fr,bk].forEach(e=>e.classList.toggle('fast',!!fast));
+    bk.style.transition='none';bk.style.opacity=anim?0:1;bk.style.transform=!anim?'none':dir==='fwd'?'scale(.92)':'scale(1.1)';
+    void bk.offsetWidth;bk.style.transition='';bk.style.opacity=1;bk.style.transform='none';bk.style.zIndex=2;fr.style.zIndex=1;
+    if(anim){fr.style.opacity=0;fr.style.transform=dir==='fwd'?'scale(1.14)':'scale(.9)'}else{fr.style.transition='none';fr.style.opacity=0;void fr.offsetWidth;fr.style.transition=''}
     SV.front=bk.id;svBoxes(it,bk)};
   if(bk.getAttribute('src')===src&&bk.complete&&bk.naturalWidth)go();else{bk.onload=()=>{bk.onload=null;go()};bk.src=src}
-  svCaption(it);svArrows(i);svDrawMini();svSide();svScrubber();svPeg();svPreload(i);
+  svCaption(it);svCount();svNavState();svPeopleCur();svPreload(i);
+  const t=$('svTime');if(document.activeElement!==t)t.value=i;
 }
+function svStep(d){const j=SV.i+d;if(j<0||j>=SV.items.length)return;svShow(j,d>0?'fwd':'back')}
+function svNavState(){$('svPrev').disabled=SV.i<=0;$('svNext').disabled=SV.i>=SV.items.length-1}
+function svCount(){$('svCount').textContent=SV.items.length?`${SV.i+1} / ${SV.items.length}`:''}
 function svPreload(i){SV._pre=SV._pre||{};for(const k of [i+1,i+2,i+3,i+4,i-1,i-2]){const s=SV.items[k];if(s&&!SV._pre[s.id]){const im=new Image();im.src='/shots/'+s.id+'.jpg';SV._pre[s.id]=im}}
   const keys=Object.keys(SV._pre);if(keys.length>60)keys.slice(0,keys.length-60).forEach(k=>delete SV._pre[k])}
 function svRect(img){const st=$('svStage'),W=st.clientWidth,H=st.clientHeight,nw=img.naturalWidth||540,nh=img.naturalHeight||960,s=Math.min(W/nw,H/nh);return {x:(W-nw*s)/2,y:(H-nh*s)/2,w:nw*s,h:nh*s}}
 function svBoxes(it,img){const r=svRect(img),b=$('svBoxes');b.style.cssText=`left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
   b.innerHTML=(it.people||[]).map(p=>{const [x1,y1,x2,y2]=p.box;return `<div class="bx ${p.watch?'watch':(p.met?'':'seen')}" style="left:${x1*100}%;top:${y1*100}%;width:${(x2-x1)*100}%;height:${(y2-y1)*100}%" onclick="openPerson('${p.id}')" title="Open ${esc(p.name||'person')}"><span>${p.possible?'possible ':''}${esc(p.name||'Unknown')}</span></div>`}).join('')}
-window.addEventListener('resize',()=>{const it=SV.items[SV.i];if(it)svBoxes(it,$(SV.front));svDrawMini()});
+window.addEventListener('resize',()=>{if(SV.open&&SV.items[SV.i])svBoxes(SV.items[SV.i],$(SV.front))});
 function svCaption(it){
-  const dirs=['N','NE','E','SE','S','SW','W','NW'],dir=it.heading!=null?dirs[Math.round(it.heading/45)%8]:'';
   const ppl=(it.people||[]).map(p=>`<a onclick="openPerson('${p.id}')">${esc(p.name||'Unknown')}</a>`);
-  const k=it.kind==='alert'?'<span class="tag alert">alert target seen</span>':it.kind==='person'?'<span class="tag person">saw someone</span>':it.kind==='manual'?'<span class="tag">photo</span>':'';
-  $('svTop').innerHTML=`<b>${svTime(it.ts)}</b><span class="muted">${svDay(it.ts)}</span><span class="tag ${it.stairs?'st':''}">${it.stairs?'stairs · ':''}floor ${it.floor||1}</span>${k}${it.place?`<span>${esc(it.place)}</span>`:''}${dir?`<span class="muted">facing ${dir}</span>`:''}${ppl.length?`<span>👤 ${ppl.join(', ')}</span>`:''}<span class="spacer"></span><span class="muted">walk ${it.walk} · ${SV.i+1}/${SV.items.length}</span>`}
-// ---- the arrows on the ground: this walk ahead/behind, and other walks that cross here
-function svBrg(a,b){if(a._x==null||b._x==null)return null;const dx=b._x-a._x,dy=b._y-a._y;if(Math.hypot(dx,dy)<0.3)return null;return (Math.atan2(dx,dy)*180/Math.PI+360)%360}
-function svLinks(i){
-  const it=SV.items[i],out=[];
-  const along=d=>{for(let j=i+d,n=0;j>=0&&j<SV.items.length&&n<8;j+=d,n++){const o=SV.items[j];if(o.walk!==it.walk)return null;if(it._x==null||o._x==null||Math.hypot(o._x-it._x,o._y-it._y)>=0.4||n>=5)return j}return null};
-  const f=along(1),b=along(-1),h=it.heading;
-  if(f!=null)out.push({j:f,brg:svBrg(it,SV.items[f])??h??0,kind:'fwd'});
-  if(b!=null)out.push({j:b,brg:svBrg(it,SV.items[b])??((h??0)+180)%360,kind:'back'});
-  if(it._x!=null){const best={};
-    SV.items.forEach((o,k)=>{if(o._x==null||(o.floor||1)!==(it.floor||1)||(o.walk===it.walk&&Math.abs(o.ts-it.ts)<120))return;
-      const d=Math.hypot(o._x-it._x,o._y-it._y);if(d>4)return;const key=o.walk+':'+Math.floor(o.ts/120);if(!best[key]||d<best[key].d)best[key]={k,d}});
-    Object.values(best).forEach(({k})=>{const o=SV.items[k];[1,-1].forEach(dd=>{let j=k+dd;while(SV.items[j]&&SV.items[j].walk===o.walk&&SV.items[j]._x!=null&&Math.hypot(SV.items[j]._x-o._x,SV.items[j]._y-o._y)<0.4)j+=dd;
-      const n=SV.items[j];if(!n||n.walk!==o.walk)return;const bb=svBrg(o,n);if(bb==null)return;out.push({j,brg:bb,kind:'jn',walk:o.walk,ts:o.ts})})})}
-  const keep=[];out.forEach(a=>{if(keep.some(k=>Math.abs(svAng(a.brg-k.brg))<30))return;keep.push(a)});return keep;
+  $('svWhen').innerHTML=`<span class="when">${svTime(it.ts)}</span><span class="muted">${svDay(it.ts)}</span>${it.place?`<span>· ${esc(it.place)}</span>`:''}${ppl.length?`<span>· 👤 ${ppl.join(', ')}</span>`:''}${it.kind==='alert'?'<span class="badge watch">ALERT</span>':''}`}
+// ---- everyone you saw, every time you saw them (a new entry when they come back after a minute away)
+function svEncounters(){
+  const key=SV.epoch+':'+SV.items.length;if(SV.encKey===key)return;SV.encKey=key;
+  const open={},out=[];
+  SV.items.forEach((s,i)=>(s.people||[]).forEach(p=>{const a=(p.box[2]-p.box[0])*(p.box[3]-p.box[1]),e=open[p.id];
+    if(e&&s.ts-e.t1<=60){e.t1=s.ts;e.i1=i;if(a>e.area){e.area=a;e.box=p.box;e.shot=s.id;e.bi=i}}
+    else{const ne={pid:p.id,name:p.name,watch:p.watch,met:p.met,i0:i,i1:i,t0:s.ts,t1:s.ts,box:p.box,shot:s.id,bi:i,area:a,place:s.place};open[p.id]=ne;out.push(ne)}}));
+  SV.enc=out;
 }
-function svArrows(i){
-  const it=SV.items[i],h=it.heading??(svLinks(i).find(a=>a.kind==='fwd')||{}).brg??0;SV.links=svLinks(i);
-  $('svArrows').innerHTML=SV.links.map((a,n)=>{const rel=svAng(a.brg-h),x=Math.sin(rel*Math.PI/180)*120,y=-Math.cos(rel*Math.PI/180)*46;
-    const t=a.kind==='fwd'?'forward':a.kind==='back'?'back':`walk ${a.walk} · ${svTime(a.ts)}`;
-    return `<div class="ar ${a.kind==='jn'?'jn':''}" style="left:${x}px;top:${y}px" onclick="svTake(${n})" title="${t}"><svg viewBox="0 0 24 24" style="transform:rotate(${rel}deg)"><path d="M4 15l8-8 8 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="t">${t}</span></div>`}).join('')}
-function svTake(n){const a=SV.links&&SV.links[n];if(!a)return;SV.follow=false;const it=SV.items[SV.i],h=it.heading??0,rel=svAng(a.brg-h);
-  svShow(a.j,Math.abs(rel)<60?'fwd':Math.abs(rel)>120?'back':(rel>0?'right':'left'))}
-function svMove(fwd){if(!SV.items.length)return;SV.follow=false;const L=SV.links||[];
-  const a=L.find(x=>x.kind===(fwd?'fwd':'back'));if(a){svTake(L.indexOf(a));return}
-  svShow(SV.i+(fwd?1:-1),fwd?'fwd':'back')}
-// ---- keyboard: click the street view first; hold an arrow to keep walking
-$('svpanel').addEventListener('keydown',e=>{if($('lb').classList.contains('open'))return;
-  const k=e.key;if(['ArrowUp','ArrowRight','ArrowDown','ArrowLeft',' '].includes(k))e.preventDefault();else return;
-  if(k===' '){svPlay();return}const now=Date.now();if(SV._kt&&now-SV._kt<110)return;SV._kt=now;svMove(k==='ArrowUp'||k==='ArrowRight')});
-$('svStage').addEventListener('mousedown',()=>$('svpanel').focus());
-function svPlay(){if(SV.play){svStopPlay();return}SV.follow=false;$('svPlayBtn').textContent='■ Stop';
-  SV.play=setInterval(()=>{const it=SV.items[SV.i],n=SV.items[SV.i+1];if(!n||n.walk!==it.walk){svStopPlay();return}svShow(SV.i+1,'fwd')},190)}
-function svStopPlay(){if(SV.play)clearInterval(SV.play);SV.play=null;$('svPlayBtn').textContent='▶ Play'}
-function svLatest(){SV.follow=true;svShow(SV.items.length-1,'jump')}
-function svScrub(v){SV.follow=false;svStopPlay();svShow(v,'jump')}
-function svScrubber(){const n=SV.items.length,t=$('svTime');t.max=Math.max(0,n-1);if(document.activeElement!==t)t.value=SV.i;
+function svFace(e){let [x1,y1,x2,y2]=e.box;const cx=(x1+x2)/2,cy=(y1+y2)/2;let bw=Math.min(1,(x2-x1)*1.5),bh=Math.min(1,(y2-y1)*1.5);
+  x1=Math.max(0,Math.min(1-bw,cx-bw/2));y1=Math.max(0,Math.min(1-bh,cy-bh/2));
+  return `background-image:url('/shots/${e.shot}.jpg');background-size:${100/bw}% ${100/bh}%;background-position:${bw<1?x1/(1-bw)*100:0}% ${bh<1?y1/(1-bh)*100:0}%`}
+function svPeople(){
+  const E=SV.enc;
+  $('svPeople').innerHTML=`<h4>People you saw · ${E.length}</h4>`+(E.map((e,k)=>{const rec=((S&&S.people)||[]).find(q=>q.id===e.pid)||{};
+    const when=svTime(e.t0)+(e.t1-e.t0>=90?'–'+svTime(e.t1):'');
+    return `<div class="svp" data-k="${k}" onclick="svShow(${e.bi},'jump')" title="Jump to when you saw them"><div class="face ${e.watch?'watch':(e.met?'':'seen')}" style="${svFace(e)}"></div>
+      <div><div class="nm">${esc(e.name||rec.name||'Unknown')}${e.watch?' <span class="badge watch">ALERT</span>':''}</div><small>${when} ${svDay(e.t0)==='today'?'':'· '+svDay(e.t0)}${e.place?' · '+esc(e.place):''}</small></div></div>`}).join('')||'<small class="muted" style="padding:6px">Nobody you know yet. Name someone and the next time they come into view, they show up here.</small>');
+  svPeopleCur();
+}
+function svPeopleCur(){let first=null;document.querySelectorAll('#svPeople .svp').forEach(el=>{const e=SV.enc[+el.dataset.k],on=e&&SV.i>=e.i0&&SV.i<=e.i1;el.classList.toggle('cur',on);if(on&&!first)first=el});
+  if(first)first.scrollIntoView({block:'nearest'})}
+function svScrubber(){const n=SV.items.length,t=$('svTime');t.max=Math.max(0,n-1);t.value=SV.i;
   if(n){$('svT0').textContent=svTime(SV.items[0].ts)+' '+svDay(SV.items[0].ts);$('svT1').textContent=svTime(SV.items[n-1].ts)+' '+svDay(SV.items[n-1].ts)}
-  const key=SV.epoch+':'+n;if($('svTicks')._k===key)return;$('svTicks')._k=key;
-  $('svTicks').innerHTML=SV.items.map((s,i)=>s.kind==='person'||s.kind==='alert'?`<i class="${s.kind}" style="left:${n>1?i/(n-1)*100:0}%" title="${esc((s.people||[]).map(p=>p.name||'?').join(', '))} · ${svTime(s.ts)}"></i>`:'').join('')}
-function svFloor(f){SV.floorSel=f;SV.follow=false;for(let i=SV.items.length-1;i>=0;i--)if((SV.items[i].floor||1)===f){svShow(i,'jump');return}}
-function svBig(){const p=$('svpanel');p.classList.toggle('big');$('svBigBtn').textContent=p.classList.contains('big')?'⤡ Smaller':'⤢ Bigger';setTimeout(()=>{const it=SV.items[SV.i];if(it)svBoxes(it,$(SV.front));svDrawMini()},50)}
-async function svPause(){await api('/shots/pause',{method:'POST',json:{paused:!S.photos_paused}});tick()}
-async function svDelete(){const it=SV.items[SV.i];if(!it)return;await api('/shots/'+it.id,{method:'DELETE'});toast('Photo deleted');SV.follow=false;await svFetch(true);svShow(Math.min(SV.i,SV.items.length-1),'jump');tick()}
-function svNavHere(){const it=SV.items[SV.i];if(!it||it.lat==null){toast('This photo has no position');return}navToPoint(it.lat,it.lng)}
-function svShowOnMap(){const it=SV.items[SV.i];if(!it||it.lat==null||!MR)return;follow=false;$('followBtn').textContent='Follow';MR.setView(it.lat,it.lng,20);$('map').scrollIntoView({behavior:'smooth',block:'center'})}
-// ---- open the street view at a person, a moment in time, or a spot on the big map
-async function svEnsure(){if(S&&S.shots_epoch!==SV.epoch)await svFetch(true)}
-function svFocus(){$('svpanel').scrollIntoView({behavior:'smooth',block:'start'});setTimeout(()=>$('svpanel').focus({preventScroll:true}),400)}
-async function svPerson(pid){await svEnsure();for(let i=SV.items.length-1;i>=0;i--)if((SV.items[i].people||[]).some(p=>p.id===pid)){SV.follow=false;svShow(i,'jump');svFocus();return}
+  $('svTicks').innerHTML=SV.enc.map(e=>`<i class="${e.watch?'alert':''}" style="left:${n>1?e.i0/(n-1)*100:0}%" title="${esc(e.name||'?')} · ${svTime(e.t0)}"></i>`).join('')}
+function svScrub(v){svShow(v,'jump')}
+// keyboard: ← → (or ↑ ↓) previous / next, hold to keep going; Esc = exit
+document.addEventListener('keydown',e=>{if(!SV.open||$('lb').classList.contains('open')||$('personOverlay').classList.contains('open'))return;
+  if(e.key==='Escape'){svClose();return}
+  const fwd=e.key==='ArrowRight'||e.key==='ArrowUp',back=e.key==='ArrowLeft'||e.key==='ArrowDown';if(!fwd&&!back)return;e.preventDefault();
+  const now=Date.now();if(SV._kt&&now-SV._kt<110)return;SV._kt=now;svStep(fwd?1:-1)});
+// ---- jump in from elsewhere: a person, a moment in time, a spot on the map
+async function svEnsure(){if(S&&(S.shots_epoch!==SV.epoch||S.n_shots!==SV.items.length))await svFetch(S.shots_epoch!==SV.epoch)}
+async function svPerson(pid){await svEnsure();for(let i=SV.items.length-1;i>=0;i--)if((SV.items[i].people||[]).some(p=>p.id===pid)){svOpen(i);return}
   const p=(S.people||[]).find(q=>q.id===pid);if(p&&p.last_seen)return svAt(p.last_seen,pid);toast('No street-view photo of them yet')}
-async function svAt(ts,pid){try{const it=await api('/shots/at?ts='+ts+(pid?'&person='+pid:''));await svEnsure();SV.follow=false;svShow(SV.byId[it.id]??SV.items.length-1,'jump');svFocus()}catch(e){toast('No photo from that moment')}}
-function svNear(lat,lng,floor){if(!SV.items.length||!SV.origin)return;const [x,y]=svLL(lat,lng);let best=-1,bd=Infinity;
-  SV.items.forEach((s,i)=>{if(s._x==null||(floor!=null&&(s.floor||1)!==floor))return;const d=Math.hypot(s._x-x,s._y-y);if(d<bd){bd=d;best=i}});
-  if(best>=0){SV.follow=false;svShow(best,'jump');svFocus()}}
-// ---- the side: a mini-map of this floor around the photo, people on this walk, the walks
-function svDrawMini(){
-  const cv=$('svMap');const W=cv.clientWidth,H=cv.clientHeight;if(!W||!H)return;if(cv.width!==W*2||cv.height!==H*2){cv.width=W*2;cv.height=H*2}
-  const g=cv.getContext('2d');g.setTransform(2,0,0,2,0,0);g.fillStyle='#0b0e12';g.fillRect(0,0,W,H);
-  const it=SV.items[SV.i];if(!it||it._x==null){g.fillStyle='#64748b';g.font='12px system-ui';g.fillText(it?'no position for this photo':'nothing walked yet',12,20);return}
-  const fl=SV.floorSel??(it.floor||1),sc=Math.min(W,H)/SV.span,P=(x,y)=>[W/2+(x-it._x)*sc,H/2-(y-it._y)*sc];SV.mini={sc,cx:it._x,cy:it._y,W,H,fl};
-  g.strokeStyle='#141a22';g.lineWidth=1;const step=SV.span>150?20:5;for(let v=Math.floor((it._x-SV.span)/step)*step;v<it._x+SV.span;v+=step){const [px]=P(v,0);g.beginPath();g.moveTo(px,0);g.lineTo(px,H);g.stroke()}
-  for(let v=Math.floor((it._y-SV.span)/step)*step;v<it._y+SV.span;v+=step){const [,py]=P(0,v);g.beginPath();g.moveTo(0,py);g.lineTo(W,py);g.stroke()}
-  // walks: other floors faint, this floor blue, this walk brighter
-  g.lineCap='round';g.lineJoin='round';
-  const segs=(pass)=>{let prev=null;SV.items.forEach(s=>{if(s._x==null){prev=null;return}const same=(s.floor||1)===fl;if(pass===0&&same||pass===1&&!same){prev=null;return}
-    if(prev&&prev.walk===s.walk&&Math.hypot(prev._x-s._x,prev._y-s._y)<8){g.strokeStyle=pass===0?'#1e2836':(s.walk===it.walk?'#60a5fa':'#2f5d9a');g.lineWidth=pass===0?2:(s.walk===it.walk?4:3);
-      g.beginPath();g.moveTo(...P(prev._x,prev._y));g.lineTo(...P(s._x,s._y));g.stroke()}prev=s})};
-  segs(0);segs(1);
-  // stairs, moments, live you, this photo
-  SV.items.forEach(s=>{if(s._x==null||(s.floor||1)!==fl)return;if(s.stairs){const [px,py]=P(s._x,s._y);g.fillStyle='#f59e0b';g.fillRect(px-2,py-2,4,4)}});
-  g.font='11px system-ui';const named=new Set(),spots=[];
-  for(let k=SV.items.length-1;k>=0;k--){const s=SV.items[k];if(s._x==null||(s.floor||1)!==fl||!(s.people||[]).length)continue;
-    s.people.forEach(p=>{if(named.has(p.id))return;named.add(p.id);const [px,py]=P(s._x,s._y);if(px<-20||px>W+20||py<-20||py>H+20)return;g.fillStyle=p.watch?'#ef4444':(p.met?'#4cc38a':'#f59e0b');g.beginPath();g.arc(px,py,4,0,Math.PI*2);g.fill();
-      let ly=py-5;while(spots.some(q=>Math.abs(q[0]-px)<60&&Math.abs(q[1]-ly)<12))ly+=12;spots.push([px,ly]);g.fillStyle='#e5e7eb';g.fillText(p.name||'?',px+6,ly)})}
-  const pos=S&&S.map&&S.map.position;if(pos&&pos.lat!=null&&SV.origin&&(pos.floor||1)===fl){const [yx,yy]=svLL(pos.lat,pos.lng),[px,py]=P(yx,yy);g.strokeStyle='#e5e7eb';g.lineWidth=2;g.beginPath();g.arc(px,py,6,0,Math.PI*2);g.stroke()}
-  const [cx,cy]=P(it._x,it._y);if(it.heading!=null){const a=(it.heading-90)*Math.PI/180;g.fillStyle='rgba(250,204,21,.35)';g.beginPath();g.moveTo(cx,cy);g.arc(cx,cy,26,a-0.55,a+0.55);g.closePath();g.fill()}
-  g.fillStyle='#facc15';g.strokeStyle='#fff';g.lineWidth=2;g.beginPath();g.arc(cx,cy,5.5,0,Math.PI*2);g.fill();g.stroke();
-  g.fillStyle='#64748b';g.font='10px system-ui';g.fillText(`N ↑ · grid ${step} m · floor ${fl}`,8,H-8);
+async function svAt(ts,pid){try{const it=await api('/shots/at?ts='+ts+(pid?'&person='+pid:''));await svEnsure();svOpen(SV.byId[it.id]??SV.items.length-1)}catch(e){toast('No photo from that moment')}}
+function svToday(){if(!SV.items.length)return [];const day=new Date(SV.items[SV.items.length-1].ts*1000).toDateString();
+  return SV.items.filter(s=>s.lat!=null&&new Date(s.ts*1000).toDateString()===day)}
+function svOpenNear(lat,lng){let best=-1,bd=Infinity;SV.items.forEach((s,i)=>{if(s.lat==null)return;const d=svM({lat,lng},s);if(d<bd){bd=d;best=i}});if(best>=0)svOpen(best)}
+// ---- on the big map: the path you took today, thick and outlined; click it to see that spot
+function svMapLayers(keep){
+  const pts=svToday();
+  const key=SV.epoch+':'+SV.items.length+':'+(MR===GoogleMap?'g':'l');
+  if(key!==SV.mapKey){SV.mapKey=key;SV.mapIds.forEach(id=>MR.remove(id));SV.mapIds=[];
+    const segs=[];let seg=[];pts.forEach(s=>{const p=seg[seg.length-1];if(p&&(svM(p,s)>30||s.ts-p.ts>900)){segs.push(seg);seg=[]}seg.push(s)});segs.push(seg);
+    segs.forEach((sg,k)=>{if(sg.length<2)return;const ll=sg.map(s=>[s.lat,s.lng]),click=(lat,lng)=>{if(lat==null)svOpen(SV.byId[sg[0].id]);else svOpenNear(lat,lng)};
+      MR.polyline('svc'+k,ll,{color:'#ffffff',weight:12,opacity:.95,z:3,onClick:click,tooltip:'Your path today · click to see it'});
+      MR.polyline('svp'+k,ll,{color:'#1a73e8',weight:7,opacity:1,z:4,onClick:click,tooltip:'Your path today · click to see it'});SV.mapIds.push('svc'+k,'svp'+k)});
+    if(pts.length){const s0=pts[0];MR.marker('svstart',s0.lat,s0.lng,{html:`<div title="Started here · ${svTime(s0.ts)}" style="width:16px;height:16px;border-radius:50%;background:#16a34a;border:3px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.4)"></div>`,w:16,h:16,z:950,onClick:()=>svOpen(SV.byId[s0.id])});SV.mapIds.push('svstart')}}
+  SV.mapIds.forEach(id=>keep.add(id));
+  if(!SV.fitted&&pts.length>=2){SV.fitted=true;svFitPath(true)}
 }
-$('svMap').addEventListener('click',e=>{const m=SV.mini;if(!m||!SV.items.length)return;const r=e.target.getBoundingClientRect(),x=m.cx+(e.clientX-r.left-m.W/2)/m.sc,y=m.cy-(e.clientY-r.top-m.H/2)/m.sc;
-  let best=-1,bd=Infinity;SV.items.forEach((s,i)=>{if(s._x==null||(s.floor||1)!==m.fl)return;const d=Math.hypot(s._x-x,s._y-y);if(d<bd){bd=d;best=i}});if(best>=0&&bd<SV.span/4){SV.follow=false;svShow(best,'jump')}});
-$('svMap').addEventListener('wheel',e=>{e.preventDefault();SV.span=Math.max(20,Math.min(2000,SV.span*(e.deltaY>0?1.2:0.83)));svDrawMini()},{passive:false});
-function svSide(){
-  const it=SV.items[SV.i];if(!it)return;const key=SV.epoch+':'+SV.items.length+':'+it.walk+':'+((S&&S.people)||[]).length;if(SV.listKey===key){svWalkCur(it);return}SV.listKey=key;
-  const ppl={};SV.items.forEach((s,i)=>{if(s.walk!==it.walk)return;(s.people||[]).forEach(p=>{if(!ppl[p.id])ppl[p.id]={...p,i,n:0};ppl[p.id].n++})});
-  const pp=Object.values(ppl).map(p=>{const rec=(S.people||[]).find(q=>q.id===p.id)||{};return `<div class="pp" onclick="SV.follow=false;svShow(${p.i},'jump')" title="Jump to where you saw them"><img src="${rec.photo||''}" alt=""><span>${esc(p.name||rec.name||'Unknown')}${p.watch?' <span class="badge watch">ALERT</span>':''}</span><span class="spacer"></span><small class="muted">${svTime(SV.items[p.i].ts)}</small></div>`}).join('');
-  const W={};SV.items.forEach((s,i)=>{const w=W[s.walk]||(W[s.walk]={walk:s.walk,i0:i,n:0,t0:s.ts,t1:s.ts,fl:new Set(),m:0,prev:null});w.n++;w.t1=s.ts;w.fl.add(s.floor||1);if(w.prev&&w.prev._x!=null&&s._x!=null)w.m+=Math.hypot(s._x-w.prev._x,s._y-w.prev._y);w.prev=s});
-  const wk=Object.values(W).reverse().map(w=>`<div class="wk" data-w="${w.walk}" onclick="SV.follow=false;svShow(${w.i0},'jump')"><span>Walk ${w.walk} · ${svTime(w.t0)} ${svDay(w.t0)}</span><small class="muted">${Math.round(w.m)} m · ${w.n}${w.fl.size>1?' · floors '+[...w.fl].sort().join('-'):''}</small></div>`).join('');
-  $('svList').innerHTML=`<h4>People on this walk</h4>${pp||'<small class="muted">nobody you know</small>'}<h4>Walks</h4>${wk}`;svWalkCur(it)}
-function svWalkCur(it){document.querySelectorAll('#svList .wk').forEach(e=>e.classList.toggle('cur',+e.dataset.w===it.walk))}
-// ---- on the big map: every walk as a blue line (click = open there), the photo you're looking at as a pegman
-function svPeg(){if(!mapReady||!MR)return;const it=SV.items[SV.i];if(!it||it.lat==null){MR.remove('svpeg');return}
-  MR.marker('svpeg',it.lat,it.lng,{html:`<div class="peg" style="transform:rotate(${it.heading||0}deg)"></div>`,w:24,h:24,z:1500,title:'Street view is here',onClick:()=>svFocus()})}
-function svMapLayers(keep,pos){
-  if(!SV.items.length)return;const cur=SV.items[SV.i],fl=SV.floorSel??(cur?cur.floor||1:(pos.floor||1));
-  const key=SV.epoch+':'+SV.items.length+':'+fl+':'+(MR===GoogleMap?'g':'l');
-  if(key!==SV.mapKey){SV.mapKey=key;(SV.mapIds||[]).forEach(id=>MR.remove(id));SV.mapIds=[];
-    let seg=[],n=0;const flush=()=>{if(seg.length>1){const s0=seg[0],f=s0.floor||1,id='svw'+(n++);const pts=seg.map(s=>[s.lat,s.lng]);
-      MR.polyline(id,pts,{color:f===fl?'#3b82f6':'#94a3b8',weight:f===fl?6:3,opacity:f===fl?.75:.45,dash:f!==fl,z:2,
-        tooltip:`Walk ${s0.walk} · ${svTime(s0.ts)} ${svDay(s0.ts)} · floor ${f} · click to see it`,onClick:(lat,lng)=>{if(lat==null){SV.follow=false;svShow(SV.byId[s0.id],'jump');svFocus();return}svNear(lat,lng,f)}});SV.mapIds.push(id)}seg=[]};
-    SV.items.forEach(s=>{if(s.lat==null){flush();return}const p=seg[seg.length-1];if(p&&(p.walk!==s.walk||(p.floor||1)!==(s.floor||1)||Math.hypot(p._x-s._x,p._y-s._y)>10))flush();seg.push(s)});flush()}
-  (SV.mapIds||[]).forEach(id=>keep.add(id));if(cur&&cur.lat!=null)keep.add('svpeg');svPeg();
-}
+function svFitPath(auto){const pts=svToday().map(s=>[s.lat,s.lng]);const pos=S&&S.map&&S.map.position;if(pos&&pos.lat!=null)pts.push([pos.lat,pos.lng]);
+  if(pts.length<2){if(!auto)toast('No path yet today');return}if(!MR)return;MR.fitBounds(pts);if(!auto){follow=false;$('followBtn').textContent='Follow'}}
 function renderHud(){
   // what the glasses show right now; when they're blank, the last card (faded) so you can see what was shown
   let d=S.display,stale=false;
@@ -852,6 +783,7 @@ const LeafletMap={
     return true;
   },
   setView(lat,lng,z){this.map.setView([lat,lng],z)},panTo(lat,lng){this.map.panTo([lat,lng],{animate:false})},
+  fitBounds(pts){this.map.fitBounds(L.latLngBounds(pts),{padding:[50,50],maxZoom:20})},
   closePopup(){this.map.closePopup()},
   popup(lat,lng,html,anchorLayer){L.popup({maxWidth:320}).setLatLng([lat,lng]).setContent(html).openOn(this.map)},
   marker(id,lat,lng,o){
@@ -887,6 +819,8 @@ const GoogleMap={
     return true;
   },
   setView(lat,lng,z){this.map.setCenter({lat,lng});if(z)this.map.setZoom(z)},panTo(lat,lng){this.map.panTo({lat,lng})},
+  fitBounds(pts){const b=new google.maps.LatLngBounds();pts.forEach(p=>b.extend({lat:p[0],lng:p[1]}));this.map.fitBounds(b,60);
+    google.maps.event.addListenerOnce(this.map,'idle',()=>{if(this.map.getZoom()>20)this.map.setZoom(20)})},
   closePopup(){if(this.iw)this.iw.close()},
   _content(html,w,h){const c=document.createElement('div');c.style.cssText=`width:${w}px;height:${h}px;transform:translateY(${h/2}px)`;c.innerHTML=html;return c},
   popup(lat,lng,html,anchor){this.iw.close();const d=document.createElement('div');d.className='gpop';d.innerHTML=html;this.iw.setContent(d);
@@ -968,10 +902,9 @@ function drawMap(){
   if(!mapReady)return;
   const m=S.map,pos=m.position;
   if(pos.lat==null){$('mapMsg').style.display='block';$('mapMsg').textContent='Waiting for GPS from the phone…';}
-  else{$('mapMsg').style.display=pos.quality==='good'||(pos.indoors&&pos.quality==='dr')?'none':'block';$('mapMsg').textContent=pos.quality==='rough'?(pos.indoors?'Indoors: walk to start (steps + camera)':`GPS rough (±${Math.round(pos.acc)} m) — map building paused`):pos.quality==='dr'?'No good GPS: counting steps':'';}
-  $('indoorBtn').className=S.indoors_forced?'primary':'';$('indoorBtn').textContent=S.indoors_forced?'Indoors ✓':(pos.indoors?'Indoors (auto)':'Indoors');$('floorBtn').textContent='floor '+(pos.floor||1);
+  else $('mapMsg').style.display='none';
   const info=[];if(m.near)info.push('near '+m.near);if(m.poi_status&&m.poi_status!=='ok')info.push('⚠ '+m.poi_status.split(':')[0]);
-  if(pos.lat!=null)info.push(`${pos.indoors?'indoors · steps + camera':'±'+Math.round(pos.acc||0)+' m'} · heading ${pos.heading!=null?Math.round(pos.heading)+'° ('+({sensor:'compass',gps:'GPS',camera:'camera'})[pos.heading_src]||pos.heading_src+')':'unknown'} · floor ${pos.floor||1}${pos.barometer?' (barometer)':''} · ${m.nodes.length} places · ${S.n_shots||0} photos`);
+  if(pos.lat!=null)info.push(`${m.nodes.length} places · ${m.pins.length} people on the map`);
   $('mapInfo').textContent=info.join(' · ');
   const keep=new Set();
   // you
@@ -982,7 +915,7 @@ function drawMap(){
   }
   // trail
   if(m.trail.length>1){MR.polyline('trail',m.trail,{color:'#ffffff',weight:2,opacity:.45,dash:'2 6',z:1});keep.add('trail')}
-  svMapLayers(keep,pos);   // street view: walks (blue lines, click to open there) + the pegman
+  svMapLayers(keep);   // the path you took today (click it to see that spot)
   // edges (walked paths) with cost
   const onRoute=(a,b)=>m.route&&m.route.path&&Math.abs(m.route.path.indexOf(a)-m.route.path.indexOf(b))===1&&m.route.path.includes(a)&&m.route.path.includes(b);
   const N={};m.nodes.forEach(n=>N[n.id]=n);
@@ -1039,5 +972,19 @@ async function markPlace(){const n=prompt('Name the place you are standing at:',
 async function clearMap(){if(!confirm('Forget all places and walked paths? People and photos stay.'))return;await api('/map/clear',{method:'POST'});toast('Map cleared')}
 async function deleteAll(){if(!confirm('Wipe EVERYTHING: people, photos, places?'))return;await api('/reset',{method:'POST'});lastPeopleKey='';lastTlKey='';toast('Everything deleted')}
 </script>
+<div class="svov" id="svov" tabindex="0">
+  <div class="svbar"><span class="title">Street view</span><span id="svWhen" style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap"></span><span class="spacer"></span><span class="muted" id="svCount"></span><button class="primary exit" onclick="svClose()">✕ Exit</button></div>
+  <div class="svbody">
+    <div class="svstage" id="svStage">
+      <img class="svl" id="svA" alt=""><img class="svl" id="svB" alt="" style="opacity:0">
+      <div id="svBoxes"></div>
+      <button class="svnav l" id="svPrev" onclick="svStep(-1)" title="Previous (←)"><b>‹</b> Previous</button>
+      <button class="svnav r" id="svNext" onclick="svStep(1)" title="Next (→)">Next <b>›</b></button>
+      <div class="svempty" id="svEmpty"><b>No photos yet</b><small>They're taken while you walk.</small></div>
+    </div>
+    <div class="svside" id="svPeople"></div>
+  </div>
+  <div class="svtime"><small class="muted" id="svT0"></small><div style="flex:1"><input type="range" id="svTime" min="0" max="0" value="0" oninput="svScrub(+this.value)" style="width:100%"><div class="svticks" id="svTicks"></div></div><small class="muted" id="svT1"></small></div>
+</div>
 </body>
 </html>

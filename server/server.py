@@ -77,6 +77,7 @@ def _load_settings():
 
 
 settings = _load_settings()
+settings["photos_paused"] = False      # no pause button any more: photos are always on after a restart (voice "pause photos" still works)
 presence = {}                # person_id -> {"start": ts, "last": ts} continuous time in view
 
 app = FastAPI(title="Beacon")

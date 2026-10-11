@@ -1,7 +1,7 @@
 # Update: the 3D world, indoors too (branch depth-3d)
 
 ## What it adds
-- **World** mode in the 3D panel rebuilds the hallways you walked: at each place the map makes (every ~8 m) the depth net measures how far the walls are on each side, and the dashboard draws floor + walls along your path from that, with the photo from each spot above it, people standing where they were seen, and you (blue arrow). `▶ Walk it` flies through at eye height; `Raw depth` shows the unprocessed surfaces; `📸 Snapshot` / voice `snapshot` takes one right here; `⤢ Bigger` makes the panel full width.
+- **World** mode in the 3D panel draws the hallways you walked as outlined boxes along your path (joined corners, open junctions; width from the depth net, else 2.4 m; outdoors with good GPS = walkway), with the photo from each place above it, people standing where they were seen, and you (blue arrow). `▶ Walk it` flies through at eye height; `📸 Snapshot` / voice `snapshot` takes one right here; `🗑 Clear 3D` starts over.
 - **Indoors:** the server now dead-reckons from the phone's **step counter** + the **glasses' compass heading** while GPS is rough, and ignores the 30–50 m Wi-Fi fixes that would yank you around. The first good GPS fix outside takes over again. Dashboard header shows `steps + compass` while it's in that mode.
 - Snapshots live in `data\world\` (one small file per place; cleared with the map).
 

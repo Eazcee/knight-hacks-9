@@ -22,6 +22,7 @@ import cv2
 NODE_SPACING_M = float(os.environ.get("BEACON_NODE_M", 8.0))   # a new place every ~8 m walked
 SNAP_M = 6.0                 # within this of a place = you're at it
 GOOD_ACC_M = float(os.environ.get("BEACON_GOOD_ACC", 15.0))     # GPS accuracy (m) we trust to build the map
+DR_BEATS_ACC_M = float(os.environ.get("BEACON_DR_BEATS", 6.0))  # while walking on steps + compass, only a fix this good overrides it
 STEP_M = 0.72                # meters per step (dead reckoning)
 CROWD_SCALE = 4.0            # faces per frame that count as "crowded" (cost x2)
 ARRIVE_M = 6.0               # within this of a waypoint = reached it
@@ -157,6 +158,8 @@ class GeoMap:
         if lat is not None and lng is not None:
             acc = float(acc) if acc is not None else 10.0
             trusted = acc <= GOOD_ACC_M
+            if trusted and acc > DR_BEATS_ACC_M and self._dr_live(ts) and self.lat is not None:
+                trusted = False   # indoors phones claim 10-15 m from Wi-Fi and jump around; steps + compass are steadier
             if trusted:
                 if self.lat is None or self.quality != "good":
                     nlat, nlng = lat, lng

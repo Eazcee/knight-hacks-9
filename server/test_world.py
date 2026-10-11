@@ -112,6 +112,10 @@ after = r["place"]
 check(abs(after["x"] - before["x"]) < 0.5 and abs(after["y"] - before["y"]) < 0.5 and after["quality"] == "dr",
       f"a 30 m-off Wi-Fi fix is ignored indoors (you stayed at {after['x']}, {after['y']})")
 
+r = frame(hall, fix=(after["x"] + 8, after["y"] - 6), acc=10, heading=90, steps=T["steps"])
+check(abs(r["place"]["x"] - after["x"]) < 0.5 and r["place"]["quality"] == "dr",
+      "…and so is a phone fix that claims 10 m but is 10 m off (indoors only a ≤6 m fix beats steps + compass)")
+
 # 5. turn left (north) and walk 10 m: y grows, x doesn't
 x0 = after["x"]
 r, evs = walk(hall, 0, 10)

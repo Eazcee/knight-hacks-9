@@ -82,7 +82,7 @@ class World:
     def photo_path(self, nid):
         return os.path.join(self.path, f"n{nid}.jpg")
 
-    def add(self, nid, depth_m, color, x, y, heading, ts, photo=None):
+    def add(self, nid, depth_m, color, x, y, heading, ts, photo=None, info=None):
         """Freeze this frame's cloud at place `nid`, standing at (x, y) facing `heading`.
         `photo` = the camera frame as JPEG bytes (shown above the place in the 3D view)."""
         ch, cw = depth_m.shape
@@ -92,6 +92,7 @@ class World:
         xc = (us - cw / 2 + 0.5) / f * z          # camera: right
         yc = -(vs - ch / 2 + 0.5) / f * z         # camera: up
         walls = corridor(xc, yc, z, color)
+        walls.update(info or {})
         s = STAMP_STRIDE
         xc, yc, z = xc[::s, ::s], yc[::s, ::s], z[::s, ::s]
         h = math.radians(heading)

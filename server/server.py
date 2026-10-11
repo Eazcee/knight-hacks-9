@@ -591,7 +591,8 @@ def _maybe_stamp(place, ts, force=False):
         im = cv2.resize(im, (int(im.shape[1] * sc), int(im.shape[0] * sc)), interpolation=cv2.INTER_AREA) if sc < 1 else im
         ok, buf = cv2.imencode(".jpg", im, [cv2.IMWRITE_JPEG_QUALITY, 80])
         photo = buf.tobytes() if ok else None
-    n = world.add(nid, last_dm, last_color, geo.x, geo.y, geo.heading, ts, photo=photo)
+    n = world.add(nid, last_dm, last_color, geo.x, geo.y, geo.heading, ts, photo=photo,
+                  info={"q": geo.quality, "acc": None if geo.acc is None else round(float(geo.acc), 1)})
     place.setdefault("events", []).append({"type": "snapshot", "node_id": nid, "points": n})
     return True
 

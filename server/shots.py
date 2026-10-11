@@ -6,9 +6,10 @@ Capture rules
   * walking (the phone's accelerometer / step counter says so): one photo every ~0.8 m,
     the sharpest frame since the last one (walking frames blur; this keeps the clear ones)
   * not walking: nothing, however much you look around
-  * a known person comes into view (named, talked to, or on the watchlist): a "moment"
-    photo right away, walking or not, so their card can open the carousel where you saw them
-  * strangers' faces are blurred in the stored photo (setting); known people get a box + name
+  * anyone comes into view (after a minute out of view): a "moment" photo right away, walking
+    or not, so the timeline has everyone you saw, every time you saw them
+  * every face is kept: recognized people with their id + box (named or "Unknown"), faces too far
+    to identify with a box ("far"). Nothing is blurred.
 
 Walks: photos within 25 m and 10 min of the previous one continue the same walk; otherwise
 a new walk starts. Walks that cross are joined by the viewer (junction arrows).
@@ -60,7 +61,8 @@ class Shots:
         self.cand = None           # sharpest frame since the last photo: (sharpness, img, people, far, meta)
         self.last_ts = 0.0
         self.in_view = {}          # person id -> last time in view (for "moments")
-        self.describe = None       # set by the server: (people, far, W, H) -> (shown, blur_boxes)
+        self.describe = None       # set by the server: (people, far, W, H) -> (shown, far_boxes, blur_boxes)
+        self.last_moment_ts = 0.0
         self.paused = False
         self._load()
 
@@ -139,7 +141,8 @@ class Shots:
 
     def add(self, img, people, far, meta, ts, kind):
         H, W = img.shape[:2]
-        shown, blur = self.describe(people, far, W, H) if self.describe else ([], [])
+        desc = self.describe(people, far, W, H) if self.describe else ([], [], [])
+        shown, far_boxes, blur = desc if len(desc) == 3 else (desc[0], [], desc[1])
         img = img.copy()
         for b in blur:
             _blur(img, b)
@@ -163,7 +166,7 @@ class Shots:
               "lat": meta.get("lat"), "lng": meta.get("lng"),
               "heading": None if meta.get("heading") is None else round(float(meta["heading"])),
               "floor": int(meta.get("floor") or 1), "stairs": bool(meta.get("stairs")), "node": meta.get("node"),
-              "walk": walk, "kind": kind, "q": meta.get("q"), "people": shown}
+              "walk": walk, "kind": kind, "q": meta.get("q"), "people": shown, "far": far_boxes}
         self.items.append(it)
         self._append(it)
         self.last_ts = ts
@@ -221,6 +224,7 @@ class Shots:
         self.cand = None
         self.last_ts = 0.0
         self.in_view.clear()
+        self.last_moment_ts = 0.0
         self._save_all()
 
     # ---- lookups -----------------------------------------------------

@@ -35,7 +35,7 @@ SIGHTING_GAP_S = 15                                              # log a sightin
 DIRS = {k: os.path.join(DATA, k) for k in ("crops", "frames", "keyframes")}
 SETTINGS_PATH = os.path.join(DATA, "settings.json")
 DEFAULT_SETTINGS = {"convo_seconds": 30, "convo_enabled": True, "google_maps_key": "", "group_radius_m": 30,
-                    "walk_min_per_mile": 16.5, "indoors": False, "blur_strangers": True, "photos_paused": False}
+                    "walk_min_per_mile": 16.5, "indoors": False, "photos_paused": False}
 CARD_HOLD_S = 4.0            # keep a person's card on the glasses this long after they leave view (no flicker)
 SESSION_GAP_S = 20 * 60      # without GPS, meetings more than 20 min apart are separate groups
 CONVO_GAP_S = 8              # a conversation survives looking away for this long
@@ -582,21 +582,18 @@ def _depth_step(img, people, ts):
 
 
 def _shot_people(people, far, W, H):
-    """Who goes on a street-view photo: known people (named, talked to, on the watchlist) get a box and
-    their name; everyone else's face is blurred in the stored photo (setting blur_strangers)."""
-    shown, blur = [], []
+    """Everyone on a street-view photo: every recognized face (named or not) with a box and their id, and
+    every face too far away to identify with a box ("far"). Nothing is blurred."""
+    def nb(b):
+        x1, y1, x2, y2 = b[:4]
+        return [round(x1 / W, 4), round(y1 / H, 4), round(x2 / W, 4), round(y2 / H, 4)]
+    shown = []
     for p in people:
-        x1, y1, x2, y2 = p["box"][:4]
         rec = db.person(p["person_id"]) or {}
-        known = p["confirmed"] and (p["name"] or p["is_watch"] or rec.get("met"))
-        if known or (p["is_watch"] and p.get("possible")):
-            shown.append({"id": p["person_id"], "name": p["name"] or p["watch_label"] or None,
-                          "box": [round(x1 / W, 4), round(y1 / H, 4), round(x2 / W, 4), round(y2 / H, 4)],
-                          "watch": bool(p["is_watch"]), "met": bool(rec.get("met")), "possible": bool(p.get("possible"))})
-        else:
-            blur.append(p["box"])
-    blur += [f["box"] for f in far]
-    return shown, (blur if settings.get("blur_strangers", True) else [])
+        shown.append({"id": p["person_id"], "name": p["name"] or p["watch_label"] or None, "box": nb(p["box"]),
+                      "watch": bool(p["is_watch"]), "met": bool(rec.get("met")), "possible": bool(p.get("possible")),
+                      "known": bool(p["name"] or p["is_watch"] or rec.get("met"))})
+    return shown, [nb(f["box"]) for f in far], []
 
 
 shots.describe = _shot_people
@@ -611,7 +608,7 @@ def _maybe_shot(img, people, place, ts, force=False):
             "heading": geo.heading if geo.heading_known else None, "floor": geo.floor,
             "stairs": ts - geo.stairs_ts < 5, "node": geo.current_node, "q": geo.quality}
     kind = "manual" if force else None
-    for p in people:
+    for p in people:                  # anyone coming into view (after a minute away) gets a photo right then
         if not p["confirmed"] and not (p["is_watch"] and p.get("possible")):
             continue
         pid = p["person_id"]
@@ -619,14 +616,15 @@ def _maybe_shot(img, people, place, ts, force=False):
         shots.in_view[pid] = ts
         if prev is not None and ts - prev < (15 if p["is_watch"] else 60):
             continue
-        rec = db.person(pid) or {}
         if p["is_watch"]:
             kind = "alert"
-        elif (p["name"] or rec.get("met")) and kind is None:
+        elif kind is None and ts - shots.last_moment_ts >= 3:      # a crowd: at most one such photo every 3 s
             kind = "person"
     it = None
     if kind and (force or not shots.paused):
         it = shots.add(img, people, faces.last_far, meta, ts, kind)
+        if it and kind in ("person", "alert"):
+            shots.last_moment_ts = ts
     elif geo.lat is not None:
         it = shots.offer(img, people, faces.last_far, meta, ts, walking, speed)
     if it:
@@ -1608,8 +1606,6 @@ async def set_settings(request: Request):
         if not settings["indoors"]:
             geo.auto_indoor = False
             geo.good_fix_ts = time.time()
-    if "blur_strangers" in body:
-        settings["blur_strangers"] = bool(body["blur_strangers"])
     if "photos_paused" in body:
         settings["photos_paused"] = bool(body["photos_paused"])
         shots.paused = settings["photos_paused"]

@@ -209,11 +209,14 @@ check(kept is not None and shots_mod.sharpness(kept) > 3 * shots_mod.sharpness(c
       "of a blurry stretch, the one sharp frame is the photo kept")
 sh.clear()
 
-# 5c. a known person comes into view: a moment photo right away (walking or not), them boxed + named, strangers blurred
+# 5c. anyone comes into view: a moment photo right away (walking or not); everyone boxed (named or "Unknown"), nothing blurred
 import insightface.data as idata  # noqa: E402
 group = idata.get_image("t1")
+n_first = c.get("/shots").json()["n"]
 r = frame(img=group, step=False, compass=0)
 ppl = sorted([p for p in r["people"] if p["confirmed"]], key=lambda p: p["box"][0])
+first = c.get("/shots").json()["shots"][n_first:]
+check(any(s["kind"] == "person" and len(s["people"]) >= 4 for s in first), f"strangers coming into view (standing still) → a photo right away, all of them in it ({[len(s['people']) for s in first]})")
 check(len(ppl) >= 4, f"{len(ppl)} faces in the group photo")
 named, stranger = ppl[1], ppl[3]
 c.post(f"/people/{named['person_id']}", json={"name": "Dana"})
@@ -224,10 +227,12 @@ T["now"] += 70     # Dana out of view for a minute, then back
 r = frame(img=group, step=False, compass=0)
 sv = c.get("/shots").json()
 moms = [s for s in sv["shots"][n3:] if s["kind"] == "person"]
-check(len(moms) == 1 and moms[0]["people"] and moms[0]["people"][0]["name"] == "Dana",
-      f"Dana came back into view → one moment photo (standing still), Dana boxed: {[p['name'] for p in moms[0]['people']] if moms else None}")
+names = [p["name"] for p in moms[0]["people"]] if moms else []
+check(len(moms) == 1 and "Dana" in names and names.count(None) >= 3 and all("box" in p and "known" in p for p in moms[0]["people"]),
+      f"back into view a minute later → one more photo: Dana named, the others as Unknown ({names})")
 m = moms[0] if moms else sv["shots"][-1]
-b = m["people"][0]["box"] if m["people"] else [0, 0, 0, 0]
+dp = [p for p in m["people"] if p["name"] == "Dana"]
+b = dp[0]["box"] if dp else [0, 0, 0, 0]
 check(0 <= b[0] < b[2] <= 1 and 0 <= b[1] < b[3] <= 1 and abs((b[0] + b[2]) / 2 - (named["box"][0] + named["box"][2]) / 2 / group.shape[1]) < 0.02,
       f"her box is where her face is (0-1 of the photo): {b}")
 photo = cv2.imread(server.shots.file(m["id"]))
@@ -240,8 +245,9 @@ def region_detail(img, box):
     return float(cv2.Laplacian(cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY), cv2.CV_32F).var())
 
 
-check(region_detail(photo, stranger["box"]) < 0.25 * region_detail(gs, stranger["box"]) and region_detail(photo, named["box"]) > 0.5 * region_detail(gs, named["box"]),
-      f"the stranger's face is blurred in the stored photo, Dana's isn't (detail {region_detail(photo, stranger['box']):.0f} vs {region_detail(gs, stranger['box']):.0f} original)")
+check(region_detail(photo, stranger["box"]) > 0.5 * region_detail(gs, stranger["box"]) and region_detail(photo, named["box"]) > 0.5 * region_detail(gs, named["box"]),
+      f"nobody is blurred: the stranger's face keeps its detail ({region_detail(photo, stranger['box']):.0f} vs {region_detail(gs, stranger['box']):.0f} original)")
+check(any(p["id"] == stranger["person_id"] and p["name"] is None and not p["known"] for p in m["people"]), "the stranger is in the photo's people list as an unknown person (so the timeline can list them)")
 mo = c.get(f"/people/{named['person_id']}/moments").json()
 check(mo and mo[0]["id"] == m["id"], "Dana's card → her moments (the street view where you saw her)")
 at = c.get("/shots/at", params={"ts": m["ts"] + 5, "person": named["person_id"]}).json()

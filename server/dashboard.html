@@ -53,7 +53,8 @@ body.svopen main,body.svopen header{visibility:hidden}
 .svstage img.svl.fast{transition-duration:.13s}
 #svBoxes{position:absolute;pointer-events:none;z-index:3}
 #svBoxes .bx{position:absolute;border:2px solid #4cc38a;border-radius:6px;box-shadow:0 0 0 1px rgba(0,0,0,.45);pointer-events:auto;cursor:pointer}
-#svBoxes .bx.watch{border-color:#ef4444}#svBoxes .bx.seen{border-color:#f59e0b}
+#svBoxes .bx.watch{border-color:#ef4444}#svBoxes .bx.seen{border-color:#f59e0b}#svBoxes .bx.unk{border-color:#cbd5e1}
+#svBoxes .bx.far{border:2px dashed rgba(203,213,225,.85);pointer-events:none}#svBoxes .bx.far span{font-size:11px;color:#cbd5e1}
 #svBoxes .bx span{position:absolute;left:-2px;bottom:100%;margin-bottom:3px;background:rgba(10,12,16,.88);color:#fff;font-size:13px;padding:1px 8px;border-radius:6px;white-space:nowrap}
 .svnav{position:absolute;top:50%;transform:translateY(-50%);z-index:5;height:110px;padding:0 18px;font-size:16px;font-weight:600;background:rgba(14,16,19,.75);border:1px solid #3a4250;border-radius:14px;color:#e5e7eb;display:flex;align-items:center;gap:8px;cursor:pointer}
 .svnav:hover{background:rgba(59,130,246,.6)}
@@ -65,12 +66,12 @@ body.svopen main,body.svopen header{visibility:hidden}
 .svp{display:flex;align-items:center;gap:10px;padding:6px;border-radius:10px;cursor:pointer}
 .svp:hover{background:#151b23}.svp.cur{background:#132033}
 .svp .face{width:44px;height:44px;border-radius:50%;background:#222 no-repeat;flex:none;border:2px solid #4cc38a}
-.svp .face.watch{border-color:#ef4444}.svp .face.seen{border-color:#f59e0b}
+.svp .face.watch{border-color:#ef4444}.svp .face.seen{border-color:#f59e0b}.svp .face.unk{border-color:#94a3b8}.svp .face.far{border:2px dashed #94a3b8}
 .svp .nm{font-weight:600;font-size:14px}.svp small{color:var(--muted);display:block}
 .svtime{display:flex;align-items:center;gap:12px;padding:10px 16px 14px;border-top:1px solid #1b222c;background:#0b0e12}
 .svticks{position:relative;height:7px;margin-top:2px}
 .svticks i{position:absolute;top:0;width:3px;height:7px;border-radius:2px;background:#4cc38a;transform:translateX(-1px)}
-.svticks i.alert{background:#ef4444}
+.svticks i.alert{background:#ef4444}.svticks i.unk{background:#64748b}
 .svempty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);flex-direction:column;gap:6px;z-index:6;background:#05070a}
 .rec{color:#ef4444;font-weight:600}
 .obst{color:#f59e0b;font-weight:600}
@@ -382,14 +383,16 @@ function renderStreet(){
   if(!S)return;
   if((S.shots_epoch!==SV.epoch||S.n_shots!==SV.items.length)&&!SV.loading)
     svFetch(S.shots_epoch!==SV.epoch).then(ok=>{if(!ok)return;svStrip();if(SV.open){svEncounters();svPeople();svScrubber();svNavState();svCount()}});
+  else{const pk=SV._pk;svPeopleById();if(pk!==SV._pk){svStrip();if(SV.open){svPeople();const it=SV.items[SV.i];if(it){svBoxes(it,$(SV.front));svCaption(it)}}}}
   const pos=(S.map&&S.map.position)||{};
   $('svInfo').innerHTML=`${S.n_shots||0} photo${S.n_shots===1?'':'s'}${pos.walking?' · <span class="rec">● taking photos</span>':' · photos are taken while you walk'}`;
 }
 function svStrip(){
-  const n=SV.items.length,key=SV.epoch+':'+n;if(SV.stripKey===key)return;SV.stripKey=key;
+  const n=SV.items.length,key=SV.epoch+':'+n+':'+SV._pk;svPeopleById();if(SV.stripKey===key+'')return;SV.stripKey=key;
   if(!n){$('svStrip').innerHTML='<div class="svstrip-empty">Photos appear here as you walk (about one per meter). Click one to step through your day like Street View.</div>';return}
   const from=Math.max(0,n-16);
-  $('svStrip').innerHTML=SV.items.slice(from).map((s,k)=>{const i=from+k,ppl=(s.people||[]).map(p=>p.name||'?').join(', ');
+  $('svStrip').innerHTML=SV.items.slice(from).map((s,k)=>{const i=from+k,P=s.people||[],nm=P.filter(p=>svName(p)).map(p=>svName(p)),rest=P.length-nm.length+(s.far||[]).length;
+    const ppl=nm.join(', ')+(rest?(nm.length?' +':'')+rest+(nm.length?'':' '+(rest>1?'people':'person')):'');
     return `<div class="th ${ppl?'p':''}" style="background-image:url('/shots/${s.id}.jpg')" onclick="svOpen(${i})" title="${svTime(s.ts)}${ppl?' · '+esc(ppl):''}"><span>${ppl?esc(ppl):svTime(s.ts)}</span></div>`}).join('');
   $('svStrip').scrollLeft=1e6;
 }
@@ -425,18 +428,27 @@ function svPreload(i){SV._pre=SV._pre||{};for(const k of [i+1,i+2,i+3,i+4,i-1,i-
   const keys=Object.keys(SV._pre);if(keys.length>60)keys.slice(0,keys.length-60).forEach(k=>delete SV._pre[k])}
 function svRect(img){const st=$('svStage'),W=st.clientWidth,H=st.clientHeight,nw=img.naturalWidth||540,nh=img.naturalHeight||960,s=Math.min(W/nw,H/nh);return {x:(W-nw*s)/2,y:(H-nh*s)/2,w:nw*s,h:nh*s}}
 function svBoxes(it,img){const r=svRect(img),b=$('svBoxes');b.style.cssText=`left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
-  b.innerHTML=(it.people||[]).map(p=>{const [x1,y1,x2,y2]=p.box;return `<div class="bx ${p.watch?'watch':(p.met?'':'seen')}" style="left:${x1*100}%;top:${y1*100}%;width:${(x2-x1)*100}%;height:${(y2-y1)*100}%" onclick="openPerson('${p.id}')" title="Open ${esc(p.name||'person')}"><span>${p.possible?'possible ':''}${esc(p.name||'Unknown')}</span></div>`}).join('')}
+  const pos=bx=>`left:${bx[0]*100}%;top:${bx[1]*100}%;width:${(bx[2]-bx[0])*100}%;height:${(bx[3]-bx[1])*100}%`;
+  b.innerHTML=(it.people||[]).map(p=>`<div class="bx ${svCls(p)}" style="${pos(p.box)}" onclick="openPerson('${p.id}')" title="Open ${esc(svName(p)||'this person')}"><span>${p.possible?'possible ':''}${esc(svName(p)||'Unknown')}</span></div>`).join('')
+    +(it.far||[]).map(bx=>`<div class="bx far" style="${pos(bx)}"><span>face</span></div>`).join('')}
+const svPeopleById=()=>{const k=(S&&S.people||[]).length+':'+(S&&S.people||[]).map(p=>p.name||'').join('|').length;if(SV._pk!==k){SV._pk=k;SV._pm={};(S&&S.people||[]).forEach(p=>SV._pm[p.id]=p)}return SV._pm||{}};
+const svName=p=>{const r=svPeopleById()[p.id||p.pid];return (r&&r.name)||p.name||null};     // named later → named in every photo
+const svCls=p=>{const r=svPeopleById()[p.id||p.pid];const known=p.known!==false||!!(r&&(r.name||r.met||r.is_watch));return p.watch?'watch':(!known?'unk':((p.met||(r&&r.met))?'':'seen'))};
 window.addEventListener('resize',()=>{if(SV.open&&SV.items[SV.i])svBoxes(SV.items[SV.i],$(SV.front))});
 function svCaption(it){
-  const ppl=(it.people||[]).map(p=>`<a onclick="openPerson('${p.id}')">${esc(p.name||'Unknown')}</a>`);
+  const named=(it.people||[]).filter(p=>svName(p)),unk=(it.people||[]).length-named.length,far=(it.far||[]).length;
+  const ppl=named.map(p=>`<a onclick="openPerson('${p.id}')">${esc(svName(p))}</a>`);if(unk)ppl.push(`${unk} unknown`);if(far)ppl.push(`${far} too far`);
   $('svWhen').innerHTML=`<span class="when">${svTime(it.ts)}</span><span class="muted">${svDay(it.ts)}</span>${it.place?`<span>· ${esc(it.place)}</span>`:''}${ppl.length?`<span>· 👤 ${ppl.join(', ')}</span>`:''}${it.kind==='alert'?'<span class="badge watch">ALERT</span>':''}`}
 // ---- everyone you saw, every time you saw them (a new entry when they come back after a minute away)
 function svEncounters(){
   const key=SV.epoch+':'+SV.items.length;if(SV.encKey===key)return;SV.encKey=key;
   const open={},out=[];
-  SV.items.forEach((s,i)=>(s.people||[]).forEach(p=>{const a=(p.box[2]-p.box[0])*(p.box[3]-p.box[1]),e=open[p.id];
-    if(e&&s.ts-e.t1<=60){e.t1=s.ts;e.i1=i;if(a>e.area){e.area=a;e.box=p.box;e.shot=s.id;e.bi=i}}
-    else{const ne={pid:p.id,name:p.name,watch:p.watch,met:p.met,i0:i,i1:i,t0:s.ts,t1:s.ts,box:p.box,shot:s.id,bi:i,area:a,place:s.place};open[p.id]=ne;out.push(ne)}}));
+  SV.items.forEach((s,i)=>{(s.people||[]).forEach(p=>{const a=(p.box[2]-p.box[0])*(p.box[3]-p.box[1]),e=open[p.id];
+    if(e&&s.ts-e.t1<=60){e.t1=s.ts;e.i1=i;if(p.name)e.name=p.name;if(a>e.area){e.area=a;e.box=p.box;e.shot=s.id;e.bi=i}}
+    else{const ne={pid:p.id,name:p.name,watch:p.watch,met:p.met,known:p.known,i0:i,i1:i,t0:s.ts,t1:s.ts,box:p.box,shot:s.id,bi:i,area:a,place:s.place};open[p.id]=ne;out.push(ne)}});
+    const F=s.far||[];if(F.length){const e=open['~far'],a=Math.max(...F.map(b=>(b[2]-b[0])*(b[3]-b[1]))),big=F.find(b=>(b[2]-b[0])*(b[3]-b[1])===a);
+      if(e&&s.ts-e.t1<=60){e.t1=s.ts;e.i1=i;if(F.length>e.n){e.n=F.length;e.bi=i;e.shot=s.id;e.box=big}}
+      else{const ne={pid:null,far:true,n:F.length,i0:i,i1:i,t0:s.ts,t1:s.ts,box:big,shot:s.id,bi:i,area:a,place:s.place};open['~far']=ne;out.push(ne)}}});
   SV.enc=out;
 }
 function svFace(e){let [x1,y1,x2,y2]=e.box;const cx=(x1+x2)/2,cy=(y1+y2)/2;let bw=Math.min(1,(x2-x1)*1.5),bh=Math.min(1,(y2-y1)*1.5);
@@ -444,17 +456,19 @@ function svFace(e){let [x1,y1,x2,y2]=e.box;const cx=(x1+x2)/2,cy=(y1+y2)/2;let b
   return `background-image:url('/shots/${e.shot}.jpg');background-size:${100/bw}% ${100/bh}%;background-position:${bw<1?x1/(1-bw)*100:0}% ${bh<1?y1/(1-bh)*100:0}%`}
 function svPeople(){
   const E=SV.enc;
-  $('svPeople').innerHTML=`<h4>People you saw · ${E.length}</h4>`+(E.map((e,k)=>{const rec=((S&&S.people)||[]).find(q=>q.id===e.pid)||{};
+  const nP=E.filter(e=>!e.far).length;
+  $('svPeople').innerHTML=`<h4>People you saw · ${nP}</h4>`+(E.map((e,k)=>{const rec=((S&&S.people)||[]).find(q=>q.id===e.pid)||{};
     const when=svTime(e.t0)+(e.t1-e.t0>=90?'–'+svTime(e.t1):'');
-    return `<div class="svp" data-k="${k}" onclick="svShow(${e.bi},'jump')" title="Jump to when you saw them"><div class="face ${e.watch?'watch':(e.met?'':'seen')}" style="${svFace(e)}"></div>
-      <div><div class="nm">${esc(e.name||rec.name||'Unknown')}${e.watch?' <span class="badge watch">ALERT</span>':''}</div><small>${when} ${svDay(e.t0)==='today'?'':'· '+svDay(e.t0)}${e.place?' · '+esc(e.place):''}</small></div></div>`}).join('')||'<small class="muted" style="padding:6px">Nobody you know yet. Name someone and the next time they come into view, they show up here.</small>');
+    const nm=e.far?`${e.n} face${e.n>1?'s':''} too far to identify`:esc(rec.name||e.name||'Unknown');
+    return `<div class="svp" data-k="${k}" onclick="svShow(${e.bi},'jump')" title="Jump to when you saw them"><div class="face ${e.far?'far':svCls(e)}" style="${svFace(e)}"></div>
+      <div><div class="nm" style="${e.far||(!e.name&&!rec.name)?'font-weight:500;color:#cbd5e1':''}">${nm}${e.watch?' <span class="badge watch">ALERT</span>':''}</div><small>${when} ${svDay(e.t0)==='today'?'':'· '+svDay(e.t0)}${e.place?' · '+esc(e.place):''}</small></div></div>`}).join('')||'<small class="muted" style="padding:6px">Nobody yet. Everyone the glasses see shows up here, every time you see them.</small>');
   svPeopleCur();
 }
 function svPeopleCur(){let first=null;document.querySelectorAll('#svPeople .svp').forEach(el=>{const e=SV.enc[+el.dataset.k],on=e&&SV.i>=e.i0&&SV.i<=e.i1;el.classList.toggle('cur',on);if(on&&!first)first=el});
   if(first)first.scrollIntoView({block:'nearest'})}
 function svScrubber(){const n=SV.items.length,t=$('svTime');t.max=Math.max(0,n-1);t.value=SV.i;
   if(n){$('svT0').textContent=svTime(SV.items[0].ts)+' '+svDay(SV.items[0].ts);$('svT1').textContent=svTime(SV.items[n-1].ts)+' '+svDay(SV.items[n-1].ts)}
-  $('svTicks').innerHTML=SV.enc.map(e=>`<i class="${e.watch?'alert':''}" style="left:${n>1?e.i0/(n-1)*100:0}%" title="${esc(e.name||'?')} · ${svTime(e.t0)}"></i>`).join('')}
+  $('svTicks').innerHTML=SV.enc.map(e=>`<i class="${e.watch?'alert':(e.far||e.known===false?'unk':'')}" style="left:${n>1?e.i0/(n-1)*100:0}%" title="${esc(e.far?e.n+' far':(e.name||'Unknown'))} · ${svTime(e.t0)}"></i>`).join('')}
 function svScrub(v){svShow(v,'jump')}
 // keyboard: ← → (or ↑ ↓) previous / next, hold to keep going; Esc = exit
 document.addEventListener('keydown',e=>{if(!SV.open||$('lb').classList.contains('open')||$('personOverlay').classList.contains('open'))return;

@@ -1,91 +1,180 @@
-"""Street view: a photo every few meters of walking, with where you stood and which way you
-faced. Step through them on the dashboard like Street View; the mini-map shows where each
-one was taken. Nothing 3D: just pictures, pinned along the path.
+"""Street view of everywhere you walked: photos while you walk (and only then), pinned to
+where you stood, which way you faced and which floor you were on. No 3D, no edge detection:
+just pictures along the path, like Google's Street View, plus the people in them.
+
+Capture rules
+  * walking (the phone's accelerometer / step counter says so): one photo every ~0.8 m,
+    the sharpest frame since the last one (walking frames blur; this keeps the clear ones)
+  * not walking: nothing, however much you look around
+  * a known person comes into view (named, talked to, or on the watchlist): a "moment"
+    photo right away, walking or not, so their card can open the carousel where you saw them
+  * strangers' faces are blurred in the stored photo (setting); known people get a box + name
+
+Walks: photos within 25 m and 10 min of the previous one continue the same walk; otherwise
+a new walk starts. Walks that cross are joined by the viewer (junction arrows).
 """
 import json
+import math
 import os
-import time
+import random
 
 import cv2
+import numpy as np
 
-SHOT_M = 3.0          # one photo per this many meters walked
-SHOT_W = 480          # stored width (portrait frames: 480x853, ~40 KB)
-MAX_SHOTS = 3000
+SPACING_M = 0.8       # target distance between photos while walking
+MIN_S, MAX_S = 0.35, 1.2
+SHOT_W = 540          # stored width (portrait frames: 540x960, ~50-70 KB)
+MAX_SHOTS = 8000
+WALK_GAP_S = 600      # a break longer than this starts a new walk
+WALK_JUMP_M = 25.0    # ...so does a jump this far from the last photo
+MOMENT_GAP_S = 60     # a person counts as "came into view" after this long out of view
+
+
+def sharpness(img):
+    h, w = img.shape[:2]
+    g = cv2.cvtColor(cv2.resize(img, (160, max(16, int(h * 160 / w))), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+    return float(cv2.Laplacian(g, cv2.CV_32F).var())
+
+
+def _blur(img, box):
+    H, W = img.shape[:2]
+    x1, y1, x2, y2 = box[:4]
+    pw, ph = (x2 - x1) * 0.2, (y2 - y1) * 0.25
+    x1, y1 = max(0, int(x1 - pw)), max(0, int(y1 - ph))
+    x2, y2 = min(W, int(x2 + pw)), min(H, int(y2 + ph))
+    if x2 - x1 < 4 or y2 - y1 < 4:
+        return
+    roi = img[y1:y2, x1:x2]
+    small = cv2.resize(roi, (max(1, (x2 - x1) // 12), max(1, (y2 - y1) // 12)), interpolation=cv2.INTER_AREA)
+    img[y1:y2, x1:x2] = cv2.GaussianBlur(cv2.resize(small, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR), (0, 0), 3)
 
 
 class Shots:
     def __init__(self, path):
         self.path = path
         os.makedirs(path, exist_ok=True)
-        self.index = os.path.join(path, "index.json")
+        self.index = os.path.join(path, "index.jsonl")
         self.items = []
+        self.epoch = random.randint(1, 1 << 30)   # changes whenever existing photos change (the dashboard refetches all)
         self.rev = 0
-        self.dist = 0.0           # meters walked since the last shot
-        self.last_heading = None
-        try:
-            with open(self.index, encoding="utf-8") as f:
-                self.items = json.load(f)
-        except Exception:
-            self.items = []
+        self.cand = None           # sharpest frame since the last photo: (sharpness, img, people, far, meta)
+        self.last_ts = 0.0
+        self.in_view = {}          # person id -> last time in view (for "moments")
+        self.describe = None       # set by the server: (people, far, W, H) -> (shown, blur_boxes)
+        self.paused = False
+        self._load()
 
-    def _save(self):
-        tmp = self.index + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.items, f)
-        os.replace(tmp, self.index)
+    # ---- storage -----------------------------------------------------
+    def _load(self):
+        items = []
+        legacy = os.path.join(self.path, "index.json")
+        try:
+            if os.path.exists(self.index):
+                with open(self.index, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                items.append(json.loads(line))
+                            except ValueError:
+                                pass
+            elif os.path.exists(legacy):
+                with open(legacy, encoding="utf-8") as f:
+                    items = json.load(f)
+        except Exception:
+            items = []
+        seen, out = set(), []
+        for it in items:            # later lines win (edits are appended by rewrite)
+            seen.add(it["id"])
+        byid = {it["id"]: it for it in items}
+        out = sorted(byid.values(), key=lambda it: it["id"])
+        for it in out:
+            it.setdefault("walk", 1)
+            it.setdefault("floor", 1)
+            it.setdefault("kind", "walk")
+            it["people"] = [p for p in it.get("people", []) if isinstance(p, dict)]
+        self.items = out
+        if os.path.exists(legacy) and not os.path.exists(self.index):
+            self._save_all()
+
+    def _append(self, it):
+        with open(self.index, "a", encoding="utf-8") as f:
+            f.write(json.dumps(it) + "\n")
         self.rev += 1
 
-    def walked(self, meters):
-        self.dist += meters
-
-    def due(self, heading, force=False):
-        """Time for a photo? After SHOT_M meters, or right after a turn (the new view), or on demand."""
-        if force or self.dist >= SHOT_M:
-            return True
-        return self.last_heading is not None and heading is not None and abs((heading - self.last_heading + 540) % 360 - 180) >= 40
-
-    def add(self, img_bgr, x, y, lat, lng, heading, ts, node_id=None, people=(), quality=None):
-        sid = int(ts * 1000)
-        h, w = img_bgr.shape[:2]
-        if w > SHOT_W:
-            img_bgr = cv2.resize(img_bgr, (SHOT_W, int(h * SHOT_W / w)), interpolation=cv2.INTER_AREA)
-        ok, buf = cv2.imencode(".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 82])
-        if not ok:
-            return None
-        with open(os.path.join(self.path, f"{sid}.jpg"), "wb") as f:
-            f.write(buf.tobytes())
-        item = {"id": sid, "ts": ts, "x": round(float(x), 2), "y": round(float(y), 2), "lat": lat, "lng": lng,
-                "heading": None if heading is None else round(float(heading)), "node": node_id,
-                "people": list(people)[:6], "q": quality}
-        self.items.append(item)
-        if len(self.items) > MAX_SHOTS:
-            old = self.items.pop(0)
-            self._rm(old["id"])
-        self.dist = 0.0
-        self.last_heading = heading
-        self._save()
-        return item
-
-    def _rm(self, sid):
-        try:
-            os.remove(os.path.join(self.path, f"{sid}.jpg"))
-        except OSError:
-            pass
+    def _save_all(self):
+        tmp = self.index + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            for it in self.items:
+                f.write(json.dumps(it) + "\n")
+        os.replace(tmp, self.index)
+        self.epoch = random.randint(1, 1 << 30)
+        self.rev += 1
 
     def file(self, sid):
         p = os.path.join(self.path, f"{int(sid)}.jpg")
         return p if os.path.exists(p) else None
 
-    def clear(self):
-        for it in self.items:
-            self._rm(it["id"])
-        self.items = []
-        self.dist, self.last_heading = 0.0, None
-        self._save()
+    def _rm(self, sid):
+        try:
+            os.remove(os.path.join(self.path, f"{int(sid)}.jpg"))
+        except OSError:
+            pass
 
+    # ---- capture -----------------------------------------------------
+    def offer(self, img, people, far, meta, ts, walking, speed):
+        """Every frame while the pipeline runs. Keeps the sharpest frame; commits one every ~0.8 m of walking."""
+        if self.paused or not walking:
+            self.cand = None
+            return None
+        s = sharpness(img)
+        if self.cand is None or s > self.cand[0]:
+            self.cand = (s, img, list(people), list(far), dict(meta))
+        interval = min(MAX_S, max(MIN_S, SPACING_M / max(speed or 1.3, 0.3)))
+        if ts - self.last_ts < interval:
+            return None
+        _, cimg, cpeople, cfar, cmeta = self.cand
+        self.cand = None
+        return self.add(cimg, cpeople, cfar, cmeta, cmeta.get("ts", ts), "walk")
+
+    def add(self, img, people, far, meta, ts, kind):
+        H, W = img.shape[:2]
+        shown, blur = self.describe(people, far, W, H) if self.describe else ([], [])
+        img = img.copy()
+        for b in blur:
+            _blur(img, b)
+        if W > SHOT_W:
+            img = cv2.resize(img, (SHOT_W, int(H * SHOT_W / W)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if not ok:
+            return None
+        sid = int(ts * 1000)
+        while any(it["id"] == sid for it in self.items[-5:]):
+            sid += 1
+        with open(os.path.join(self.path, f"{sid}.jpg"), "wb") as f:
+            f.write(buf.tobytes())
+        last = self.items[-1] if self.items else None
+        walk = last["walk"] if last else 0
+        far_jump = (last is not None and meta.get("lat") is not None and last.get("lat") is not None
+                    and math.hypot(meta["x"] - last["x"], meta["y"] - last["y"]) > WALK_JUMP_M)
+        if last is None or ts - last["ts"] > WALK_GAP_S or far_jump:
+            walk += 1
+        it = {"id": sid, "ts": round(ts, 3), "x": round(float(meta.get("x") or 0.0), 2), "y": round(float(meta.get("y") or 0.0), 2),
+              "lat": meta.get("lat"), "lng": meta.get("lng"),
+              "heading": None if meta.get("heading") is None else round(float(meta["heading"])),
+              "floor": int(meta.get("floor") or 1), "stairs": bool(meta.get("stairs")), "node": meta.get("node"),
+              "walk": walk, "kind": kind, "q": meta.get("q"), "people": shown}
+        self.items.append(it)
+        self._append(it)
+        self.last_ts = ts
+        if len(self.items) > MAX_SHOTS:
+            old = self.items.pop(0)
+            self._rm(old["id"])
+        return it
+
+    # ---- edits -------------------------------------------------------
     def rotate_since(self, since_ts, pivot, deg, to_latlng):
-        """A turn was recognised late: swing the photos taken since around the corner, onto the new heading."""
-        import math
+        """A turn was recognised a moment late: swing the photos taken since around the corner."""
         a = math.radians(deg)
         px, py = pivot
         changed = False
@@ -93,7 +182,6 @@ class Shots:
             if it["ts"] < since_ts:
                 continue
             dx, dy = it["x"] - px, it["y"] - py
-            # heading clockwise from north: rotating the walk by +deg clockwise
             nx = px + dx * math.cos(a) + dy * math.sin(a)
             ny = py - dx * math.sin(a) + dy * math.cos(a)
             it["x"], it["y"] = round(nx, 2), round(ny, 2)
@@ -102,14 +190,54 @@ class Shots:
                 it["heading"] = round((it["heading"] + deg) % 360)
             changed = True
         if changed:
-            self.last_heading = None if self.last_heading is None else (self.last_heading + deg) % 360
-            self._save()
+            self._save_all()
         return changed
 
-    def near(self, x, y, max_m=6.0):
-        best, bd = None, max_m
+    def mark_stairs(self, since_ts):
+        """A floor change was confirmed: the photos of the last ~20 s were the stairwell / elevator."""
+        changed = False
+        for it in reversed(self.items):
+            if it["ts"] < since_ts:
+                break
+            if not it.get("stairs"):
+                it["stairs"] = True
+                changed = True
+        if changed:
+            self._save_all()
+
+    def delete(self, sid):
+        n = len(self.items)
+        self.items = [it for it in self.items if it["id"] != int(sid)]
+        if len(self.items) != n:
+            self._rm(sid)
+            self._save_all()
+            return True
+        return False
+
+    def clear(self):
         for it in self.items:
-            d = ((it["x"] - x) ** 2 + (it["y"] - y) ** 2) ** 0.5
+            self._rm(it["id"])
+        self.items = []
+        self.cand = None
+        self.last_ts = 0.0
+        self.in_view.clear()
+        self._save_all()
+
+    # ---- lookups -----------------------------------------------------
+    def since(self, after_id):
+        import bisect
+        ids = [it["id"] for it in self.items]
+        return self.items[bisect.bisect_right(ids, int(after_id)):]
+
+    def at_time(self, ts, max_s=120, person=None):
+        best, bd = None, max_s
+        for it in self.items:
+            if person and not any(p["id"] == person for p in it["people"]):
+                continue
+            d = abs(it["ts"] - ts)
             if d < bd:
                 best, bd = it, d
         return best
+
+    def moments(self, pid):
+        return [it for it in self.items if any(p["id"] == pid for p in it["people"])]

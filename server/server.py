@@ -35,7 +35,7 @@ SIGHTING_GAP_S = 15                                              # log a sightin
 DIRS = {k: os.path.join(DATA, k) for k in ("crops", "frames", "keyframes")}
 SETTINGS_PATH = os.path.join(DATA, "settings.json")
 DEFAULT_SETTINGS = {"convo_seconds": 30, "convo_enabled": True, "google_maps_key": "", "group_radius_m": 30,
-                    "walk_min_per_mile": 16.5, "indoors": False}
+                    "walk_min_per_mile": 16.5, "indoors": False, "blur_strangers": True, "photos_paused": False}
 CARD_HOLD_S = 4.0            # keep a person's card on the glasses this long after they leave view (no flicker)
 SESSION_GAP_S = 20 * 60      # without GPS, meetings more than 20 min apart are separate groups
 CONVO_GAP_S = 8              # a conversation survives looking away for this long
@@ -50,9 +50,9 @@ db.prune_anonymous(RETENTION_H * 3600)
 faces = FaceEngine(db, crops_dir=DIRS["crops"], auto_enroll=AUTO_ENROLL)
 geo = GeoMap(db)
 
-# depth (3D from the single camera): optional, BEACON_DEPTH=0 turns it off
+# depth from the single camera: off by default (BEACON_DEPTH=1: distances to people + "obstacle ahead" reroutes)
 depth = None
-if os.environ.get("BEACON_DEPTH", "1") == "1":
+if os.environ.get("BEACON_DEPTH", "0") == "1":
     try:
         from depth import DepthEngine
         _prov, _ctx = faces_mod._providers()
@@ -60,12 +60,8 @@ if os.environ.get("BEACON_DEPTH", "1") == "1":
     except Exception as _e:
         print("depth disabled:", _e)
 AUTO_BLOCK = os.environ.get("BEACON_AUTO_BLOCK", "1") == "1"
-from world import World  # noqa: E402
-world = World(os.path.join(DATA, "world"))
 from shots import Shots  # noqa: E402
 shots = Shots(os.path.join(DATA, "shots"))
-last_dm = None            # latest metric depth map + colors, for snapshots
-last_color = None
 OBSTACLE_COOLDOWN_S = 20
 last_cloud = None
 last_depth = {}
@@ -408,10 +404,12 @@ def _sighting_public(s):
 @app.post("/frame")
 async def frame(request: Request, heading: float | None = None, steps: int | None = None,
                 lat: float | None = None, lng: float | None = None, acc: float | None = None,
-                ts: float | None = None):
+                ts: float | None = None, pressure: float | None = None, floor: int | None = None,
+                moving: int | None = None):
     """Main pipeline. Body = JPEG (Content-Type image/jpeg) or multipart 'image'.
     Optional query params: lat, lng, acc (GPS, meters), heading (deg, 0=north, clockwise),
-    steps (cumulative pedometer), ts."""
+    steps (cumulative pedometer), moving (0/1, the phone's accelerometer: walking right now),
+    pressure (hPa, the phone's barometer: floors), floor (explicit), ts."""
     global dropped
     img = await _image_from_request(request)
     ts = ts or time.time()
@@ -419,7 +417,7 @@ async def frame(request: Request, heading: float | None = None, steps: int | Non
         dropped += 1   # still busy with the previous frame: drop this one, keep latency low
         return {"dropped": True, "people": [], "alerts": [], "place": None, "display": last_display}
     try:
-        return await run_in_threadpool(_pipeline, img, heading, steps, lat, lng, acc, ts)
+        return await run_in_threadpool(_pipeline, img, heading, steps, lat, lng, acc, ts, pressure, floor, moving)
     finally:
         pipeline_lock.release()
 
@@ -489,7 +487,7 @@ def _draw_live(img, people, far, scale=1.0):
         last_live = buf.tobytes()
 
 
-def _pipeline(img, heading, steps, lat, lng, acc, ts):
+def _pipeline(img, heading, steps, lat, lng, acc, ts, pressure=None, floor=None, moving=None):
     global last_people, last_display, frame_count
     frame_count += 1
     t0 = time.perf_counter()
@@ -499,15 +497,15 @@ def _pipeline(img, heading, steps, lat, lng, acc, ts):
     if depth is not None:
         obstacle = _depth_step(img, people, ts)
     place = geo.observe(img, heading_deg=heading, steps=steps, lat=lat, lng=lng, acc=acc, ts=ts,
-                        faces=len(people) + len(faces.last_far), indoors=settings.get("indoors", False))
+                        faces=len(people) + len(faces.last_far), indoors=settings.get("indoors", False),
+                        pressure=pressure, floor=floor, moving=moving)
     if obstacle and obstacle["blocked"]:
         _maybe_auto_block(place, ts)
     for ev in place["events"]:
         if ev["type"] == "turn":
             shots.rotate_since(ev["since"], ev["pivot"], ev["deg"], geo.latlng_of)
-            if ev.get("moved_node") is not None and world.has(ev["moved_node"]):
-                world.move(ev["moved_node"], geo.x, geo.y, geo.heading)
-    _maybe_stamp(place, ts)
+        elif ev["type"] == "floor" and ev.get("node_id") is not None:
+            shots.mark_stairs(ev["since"])
     _maybe_shot(img, people, place, ts)
     _track_conversations(people, ts)
     for p in people:   # walking to someone and the camera sees them: that's the arrival
@@ -576,48 +574,63 @@ def _depth_step(img, people, ts):
                              "dist_m": round(d, 1), "is_watch": p["is_watch"], "met": bool((db.person(p["person_id"]) or {}).get("met"))})
     ob = depth.obstacle(dm, people + faces.last_far, W, H)
     last_cloud = depth.cloud(dm, color, W, H, ts, faces_3d)
-    global last_dm, last_color
-    last_dm, last_color = dm, color
     last_depth = {"device": depth.device, "ms": round(depth.ms), "scale": None if depth.scale is None else round(depth.scale, 1),
                   "calibrated": depth.scale is not None, "scale_src": depth.scale_src, "obstacle": ob, "faces": faces_3d, "ts": ts,
                   "center_m": round(float(np.median(dm[dm.shape[0] // 3: 2 * dm.shape[0] // 3, dm.shape[1] // 3: 2 * dm.shape[1] // 3])), 1)}
     return ob
 
 
+def _shot_people(people, far, W, H):
+    """Who goes on a street-view photo: known people (named, talked to, on the watchlist) get a box and
+    their name; everyone else's face is blurred in the stored photo (setting blur_strangers)."""
+    shown, blur = [], []
+    for p in people:
+        x1, y1, x2, y2 = p["box"][:4]
+        rec = db.person(p["person_id"]) or {}
+        known = p["confirmed"] and (p["name"] or p["is_watch"] or rec.get("met"))
+        if known or (p["is_watch"] and p.get("possible")):
+            shown.append({"id": p["person_id"], "name": p["name"] or p["watch_label"] or None,
+                          "box": [round(x1 / W, 4), round(y1 / H, 4), round(x2 / W, 4), round(y2 / H, 4)],
+                          "watch": bool(p["is_watch"]), "met": bool(rec.get("met")), "possible": bool(p.get("possible"))})
+        else:
+            blur.append(p["box"])
+    blur += [f["box"] for f in far]
+    return shown, (blur if settings.get("blur_strangers", True) else [])
+
+
+shots.describe = _shot_people
+
+
 def _maybe_shot(img, people, place, ts, force=False):
-    """Street view: a photo every ~3 m of walking (and after a turn, and on demand)."""
-    if geo.lat is None:
-        return None
-    shots.walked(geo.last_moved)
-    if not (force or shots.due(geo.heading if geo.heading_known else None)):
-        return None
-    names = [p["name"] or p["watch_label"] or "someone" for p in people if p["confirmed"] and not p.get("possible")]
-    it = shots.add(img, geo.x, geo.y, geo.lat, geo.lng, geo.heading if geo.heading_known else None, ts,
-                   node_id=geo.current_node, people=names, quality=geo.quality)
+    """Street view: photos only while walking (~one per 0.8 m, the sharpest frame of each stretch); a
+    'moment' photo whenever a known person comes into view; on demand (button / voice 'photo')."""
+    shots.paused = bool(settings.get("photos_paused"))
+    walking, speed = geo.walking(ts)
+    meta = {"ts": ts, "x": geo.x, "y": geo.y, "lat": geo.lat, "lng": geo.lng,
+            "heading": geo.heading if geo.heading_known else None, "floor": geo.floor,
+            "stairs": ts - geo.stairs_ts < 5, "node": geo.current_node, "q": geo.quality}
+    kind = "manual" if force else None
+    for p in people:
+        if not p["confirmed"] and not (p["is_watch"] and p.get("possible")):
+            continue
+        pid = p["person_id"]
+        prev = shots.in_view.get(pid)
+        shots.in_view[pid] = ts
+        if prev is not None and ts - prev < (15 if p["is_watch"] else 60):
+            continue
+        rec = db.person(pid) or {}
+        if p["is_watch"]:
+            kind = "alert"
+        elif (p["name"] or rec.get("met")) and kind is None:
+            kind = "person"
+    it = None
+    if kind and (force or not shots.paused):
+        it = shots.add(img, people, faces.last_far, meta, ts, kind)
+    elif geo.lat is not None:
+        it = shots.offer(img, people, faces.last_far, meta, ts, walking, speed)
     if it:
-        place.setdefault("events", []).append({"type": "shot", "id": it["id"]})
+        place.setdefault("events", []).append({"type": "shot", "id": it["id"], "kind": it["kind"]})
     return it
-
-
-def _maybe_stamp(place, ts, force=False):
-    """A new place (or one without a snapshot yet): freeze the 3D cloud there."""
-    if last_dm is None or not geo.heading_known or geo.current_node is None:
-        return False
-    nid = geo.current_node
-    new_here = any(e.get("node_id") == nid and e["type"] in ("new_place", "arrived") for e in place.get("events", []))
-    if not (force or (new_here and not world.has(nid))):
-        return False
-    photo = None
-    if geo.last_img is not None:
-        im = geo.last_img
-        sc = 360 / max(im.shape[:2]) if max(im.shape[:2]) > 360 else 1.0
-        im = cv2.resize(im, (int(im.shape[1] * sc), int(im.shape[0] * sc)), interpolation=cv2.INTER_AREA) if sc < 1 else im
-        ok, buf = cv2.imencode(".jpg", im, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        photo = buf.tobytes() if ok else None
-    n = world.add(nid, last_dm, last_color, geo.x, geo.y, geo.heading, ts, photo=photo,
-                  info={"q": geo.quality, "acc": None if geo.acc is None else round(float(geo.acc), 1)})
-    place.setdefault("events", []).append({"type": "snapshot", "node_id": nid, "points": n})
-    return True
 
 
 def _maybe_auto_block(place, ts):
@@ -694,52 +707,43 @@ async def scan(request: Request):
         pipeline_lock.release()
 
 
-@app.get("/world.bin")
-def world_bin():
-    """Every 3D snapshot in world meters (layout in world.py)."""
-    return Response(world.blob(), media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
-
-
-@app.get("/world.json")
-def world_json():
-    """What goes with the snapshots: places, paths, people and you, all in local meters (x east, y north)."""
-    pins = []
-    for p in _pins():
-        x, y = geo._xy(p["lat"], p["lng"])
-        pins.append({"id": p["id"], "name": p["name"], "x": round(x, 1), "y": round(y, 1), "met": p["met"], "is_watch": p["is_watch"]})
-    route = None
-    if geo.route:
-        route = [[round(v, 1) for v in geo._xy(w["lat"], w["lng"])] for w in geo.route["waypoints"][geo.route["i"]:]]
-    return {"stamps": world.meta(), "n_points": world.n_points(), "rev": world.rev,
-            "nodes": [{"id": n["id"], "name": geo.node_name(n), "named": bool(n["name"]), "x": round(n["x"] or 0, 1), "y": round(n["y"] or 0, 1)}
-                      for n in db.nodes() if n.get("lat") is not None],
-            "edges": [{"a": e["a"], "b": e["b"], "blocked": bool(e["blocked"])} for e in db.edges() if e["a"] < e["b"]],
-            "pins": pins, "route": route,
-            "trail": [[round(v, 1) for v in geo._xy(t[1], t[2])] for t in list(geo.trail)[-600:]],
-            "you": {"x": round(geo.x, 1), "y": round(geo.y, 1), "heading": geo.heading if geo.heading_known else None,
-                    "quality": geo.quality, "has_position": geo.lat is not None}}
-
-
-@app.post("/world/snapshot")
-def world_snapshot():
-    """Take a snapshot right here, right now (dashboard button / voice 'snapshot')."""
-    if last_dm is None:
-        raise HTTPException(409, "no depth yet")
-    if geo.lat is None or not geo.heading_known:
-        raise HTTPException(409, "need a position and a heading first")
-    if geo.current_node is None:
-        geo.mark_place(None)
-    place = {"events": []}
-    _maybe_stamp(place, time.time(), force=True)
-    return {"ok": True, "node_id": geo.current_node, "stamps": len(world.stamps)}
-
-
 @app.get("/shots")
-def list_shots():
-    """Street view: every photo taken along the walk, oldest first, with where it was taken (local meters, lat/lng, heading)."""
-    names = {n["id"]: geo.node_name(n) for n in db.nodes()}
-    return {"rev": shots.rev, "n": len(shots.items),
-            "shots": [{**it, "place": names.get(it.get("node"))} for it in shots.items]}
+def list_shots(after: int = 0, epoch: int = 0):
+    """Street view photos, oldest first: where (x/y local meters, lat/lng), facing, floor, walk, kind
+    (walk / person / alert / manual), and the known people in each with their box (0-1 of the photo).
+    Incremental: pass back `epoch` and the last id you have as `after`; when existing photos changed
+    (a turn re-placed some, one was deleted) the epoch moves and you get everything again."""
+    full = epoch != shots.epoch
+    items = shots.items if full else shots.since(after)
+    named = {n["id"]: n["name"] for n in db.nodes() if n["name"]}
+    return {"epoch": shots.epoch, "full": full, "n": len(shots.items),
+            "shots": [{**it, "place": named.get(it.get("node"))} for it in items]}
+
+
+@app.get("/shots/at")
+def shot_at(ts: float, person: str | None = None):
+    """The photo nearest a moment in time (e.g. a sighting), with that person in it if possible."""
+    it = (shots.at_time(ts, person=person) if person else None) or shots.at_time(ts)
+    if not it:
+        raise HTTPException(404, "no photo near that time")
+    return it
+
+
+@app.get("/people/{pid}/moments")
+def person_moments(pid: str):
+    """Every street-view photo this person is in, newest first."""
+    return list(reversed(shots.moments(pid)))
+
+
+@app.post("/floor")
+async def set_floor(request: Request):
+    """{floor, moved}: moved=true (default) = you just went up/down: a stairs place joins the floors and the
+    last photos are the stairwell; moved=false = a correction ("I'm on floor 3")."""
+    body = await request.json()
+    ev = geo.set_floor(int(body.get("floor", 1)), link=bool(body.get("moved", True)))
+    if ev and ev.get("node_id") is not None:
+        shots.mark_stairs(ev["since"])
+    return {"ok": True, "floor": geo.floor, "event": ev}
 
 
 @app.get("/shots/{sid}.jpg")
@@ -750,11 +754,18 @@ def shot_jpg(sid: int):
     return Response(open(p, "rb").read(), media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
 
+@app.delete("/shots/{sid}")
+def shot_delete(sid: int):
+    if not shots.delete(sid):
+        raise HTTPException(404, "no such photo")
+    return {"ok": True, "n": len(shots.items)}
+
+
 @app.post("/shots/take")
 def shot_take():
     """A photo right here, right now (dashboard button / voice 'photo')."""
-    if geo.last_img is None or geo.lat is None:
-        raise HTTPException(409, "need a camera frame and a position first")
+    if geo.last_img is None:
+        raise HTTPException(409, "no camera frame yet")
     it = _maybe_shot(geo.last_img, last_people, {"events": []}, time.time(), force=True)
     return {"ok": bool(it), "shot": it, "n": len(shots.items)}
 
@@ -765,18 +776,13 @@ def shots_clear():
     return {"ok": True}
 
 
-@app.get("/world/photo/{nid}.jpg")
-def world_photo(nid: int):
-    p = world.photo_path(nid)
-    if not os.path.exists(p):
-        raise HTTPException(404, "no photo")
-    return Response(open(p, "rb").read(), media_type="image/jpeg")
-
-
-@app.post("/world/clear")
-def world_clear():
-    world.clear()
-    return {"ok": True}
+@app.post("/shots/pause")
+async def shots_pause(request: Request):
+    body = await request.json()
+    settings["photos_paused"] = bool(body.get("paused", True))
+    shots.paused = settings["photos_paused"]
+    _save_settings()
+    return {"ok": True, "paused": settings["photos_paused"]}
 
 
 @app.get("/cloud.bin")
@@ -1131,8 +1137,7 @@ def clear_map():
     """Forget all places and the walked map (keeps people and their photos)."""
     db.clear_map()
     geo.__init__(db)
-    geo.indoors = bool(settings.get("indoors", False))
-    world.clear()
+    geo.indoors_forced = bool(settings.get("indoors", False))
     shots.clear()
     last_sighting_log.clear()
     return {"ok": True}
@@ -1573,6 +1578,11 @@ def _watchlist(public):
 
 
 # ---------------------------------------------------------------- settings / met
+def _save_settings():
+    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(settings, f)
+
+
 @app.get("/settings")
 def get_settings():
     return settings
@@ -1593,7 +1603,15 @@ async def set_settings(request: Request):
         settings["google_maps_key"] = (body["google_maps_key"] or "").strip()
     if "indoors" in body:
         settings["indoors"] = bool(body["indoors"])
-        geo.indoors = settings["indoors"]
+        geo.indoors_forced = settings["indoors"]
+        if not settings["indoors"]:
+            geo.auto_indoor = False
+            geo.good_fix_ts = time.time()
+    if "blur_strangers" in body:
+        settings["blur_strangers"] = bool(body["blur_strangers"])
+    if "photos_paused" in body:
+        settings["photos_paused"] = bool(body["photos_paused"])
+        shots.paused = settings["photos_paused"]
     with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
         json.dump(settings, f)
     return settings
@@ -1723,26 +1741,39 @@ async def command(request: Request):
         return {"ok": True, "say": "Search ended"}
     if text in ("indoors", "going inside", "inside", "we're inside"):
         settings["indoors"] = True
-        geo.indoors = True
-        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(settings, f)
+        geo.indoors_forced = True
+        _save_settings()
         return {"ok": True, "say": "Indoors: steps and the camera from here"}
     if text in ("outdoors", "going outside", "outside", "we're outside"):
         settings["indoors"] = False
-        geo.indoors = False
-        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(settings, f)
+        geo.indoors_forced = False
+        geo.auto_indoor = False
+        geo.good_fix_ts = time.time()
+        _save_settings()
         return {"ok": True, "say": "Outdoors: GPS again"}
-    if text in ("photo", "take a photo", "street view", "picture"):
+    if text in ("pause photos", "stop photos", "privacy", "stop recording"):
+        settings["photos_paused"] = True
+        shots.paused = True
+        _save_settings()
+        return {"ok": True, "say": "Photos paused"}
+    if text in ("resume photos", "start photos", "start recording"):
+        settings["photos_paused"] = False
+        shots.paused = False
+        _save_settings()
+        return {"ok": True, "say": "Photos on"}
+    if text in ("upstairs", "going upstairs", "going up", "up a floor"):
+        geo.set_floor(geo.floor + 1)
+        return {"ok": True, "say": f"Floor {geo.floor}"}
+    if text in ("downstairs", "going downstairs", "going down", "down a floor"):
+        geo.set_floor(geo.floor - 1)
+        return {"ok": True, "say": f"Floor {geo.floor}"}
+    if text.startswith("floor ") and text[6:].strip().lstrip("-").isdigit():
+        geo.set_floor(int(text[6:].strip()))
+        return {"ok": True, "say": f"Floor {geo.floor}"}
+    if text in ("photo", "take a photo", "street view", "picture", "snapshot", "take a snapshot"):
         try:
             r = shot_take()
             return {"ok": True, "say": f"Photo saved, {r['n']} along the walk"}
-        except HTTPException as e:
-            return {"ok": False, "say": e.detail}
-    if text in ("snapshot", "take a snapshot", "capture here", "3d snapshot"):
-        try:
-            r = world_snapshot()
-            return {"ok": True, "say": f"Snapshot saved, {r['stamps']} places in 3D"}
         except HTTPException as e:
             return {"ok": False, "say": e.detail}
     if text in ("scan", "scan the room", "scan room", "scan the crowd", "look around", "who's here", "who is here"):
@@ -1784,8 +1815,9 @@ def state():
         "dropped": dropped,
         "has_live": last_live is not None,
         "has_cloud": last_cloud is not None,
-        "world_stamps": len(world.stamps), "world_rev": world.rev, "n_shots": len(shots.items), "shots_rev": shots.rev,
-        "indoors": bool(settings.get("indoors", False)),
+        "n_shots": len(shots.items), "shots_rev": shots.rev, "shots_epoch": shots.epoch,
+        "photos_paused": bool(settings.get("photos_paused")),
+        "indoors": geo.indoors, "indoors_forced": bool(settings.get("indoors", False)), "floor": geo.floor,
         "depth": last_depth if depth is not None else None,
         "frame_size": faces.last_size,
         "timing": _timing(),
@@ -1837,9 +1869,8 @@ def reset():
     card_hold.update(card=None, ts=0.0)
     last_shown.update(card=None, ts=0.0)
     globals()["search"] = None
-    world.clear()
     shots.clear()
-    geo.indoors = bool(settings.get("indoors", False))
+    geo.indoors_forced = bool(settings.get("indoors", False))
     faces.last_far = []
     recent_alerts.clear()
     reports.clear()

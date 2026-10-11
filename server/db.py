@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS edges (
 MIGRATIONS = {
     "embeddings": {"crop": "TEXT", "quality": "REAL DEFAULT 0", "source": "TEXT DEFAULT 'auto'"},
     "sightings": {"frame": "TEXT", "box": "TEXT", "quality": "REAL DEFAULT 0", "lat": "REAL", "lng": "REAL"},
-    "nodes": {"lat": "REAL", "lng": "REAL"},
+    "nodes": {"lat": "REAL", "lng": "REAL", "floor": "INTEGER DEFAULT 1"},
     "people": {"met": "INTEGER DEFAULT 0", "met_at": "REAL", "met_lat": "REAL", "met_lng": "REAL", "category": "TEXT"},
 }
 
@@ -343,10 +343,10 @@ class DB:
         )
 
     # ---- places --------------------------------------------------------
-    def add_node(self, name, x, y, keyframe=None, qr=None, lat=None, lng=None):
+    def add_node(self, name, x, y, keyframe=None, qr=None, lat=None, lng=None, floor=1):
         return self._run(
-            "INSERT INTO nodes (name, x, y, keyframe, qr, created_at, lat, lng) VALUES (?,?,?,?,?,?,?,?)",
-            (name, x, y, keyframe, qr, time.time(), lat, lng),
+            "INSERT INTO nodes (name, x, y, keyframe, qr, created_at, lat, lng, floor) VALUES (?,?,?,?,?,?,?,?,?)",
+            (name, x, y, keyframe, qr, time.time(), lat, lng, floor),
         )
 
     def node(self, nid):

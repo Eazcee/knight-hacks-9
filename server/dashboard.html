@@ -41,6 +41,17 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 #d3photos img{position:absolute;transform:translate(-50%,-100%);width:44px;height:78px;object-fit:cover;border:2px solid #e5e7eb;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.6);pointer-events:auto;cursor:zoom-in;background:#111}
 #d3photos img:hover{z-index:2;border-color:#3b82f6;transform:translate(-50%,-100%) scale(1.8);transform-origin:50% 100%}
 .d3tools{position:absolute;left:10px;bottom:10px;display:none;gap:6px}
+#sv{position:absolute;inset:0;display:flex;background:#06080b}
+#sv .svphoto{position:relative;flex:1;min-width:0;display:flex;align-items:center;justify-content:center;background:#000}
+#sv .svphoto img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+#sv .svnav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:72px;font-size:34px;line-height:1;background:rgba(14,16,19,.7);border:1px solid #3a4250;color:#e5e7eb;border-radius:10px}
+#sv .svnav.l{left:8px}#sv .svnav.r{right:8px}
+#sv .svcap{position:absolute;left:0;right:0;bottom:0;padding:8px 12px;background:linear-gradient(transparent,rgba(0,0,0,.8));font-size:13px;color:#e5e7eb;display:flex;gap:12px;align-items:baseline}
+#sv .svcap b{font-size:15px}
+#svMap{width:34%;min-width:200px;max-width:420px;background:#0b0e12;border-left:1px solid #1f2731;cursor:pointer}
+#sv .svtools{position:absolute;left:10px;bottom:46px;display:flex;gap:6px}
+#sv .svtools button{font-size:12px;padding:5px 9px;background:rgba(14,16,19,.85)}
+.panel.big #sv .svcap{font-size:15px}
 .d3tools button{font-size:12px;padding:5px 9px;background:rgba(14,16,19,.85)}
 .d3tools button.on{border-color:#4cc38a;color:#4cc38a}
 #d3labels .d3l{position:absolute;transform:translate(-50%,-100%);background:rgba(14,16,19,.85);border:1px solid #4cc38a;border-radius:6px;padding:2px 7px;font-size:12px;white-space:nowrap}
@@ -219,11 +230,15 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
       </div>
       <div class="panel" id="d3panel">
         <h2>3D view
-          <span class="right"><button id="d3live" class="primary" onclick="d3mode('live')">Live</button><button id="d3world" onclick="d3mode('world')">World</button>
+          <span class="right"><button id="d3live" class="primary" onclick="d3mode('live')">Live</button><button id="d3street" onclick="d3mode('street')">Street view</button><button id="d3world" onclick="d3mode('world')">World</button>
           <button onclick="api('/world/snapshot',{method:'POST'}).then(r=>toast('Snapshot saved · '+r.stamps+' places in 3D')).catch(()=>{})" title="Freeze the current 3D view at this spot">📸 Snapshot</button>
           <button class="ghost" onclick="d3reset()" title="Reset the camera angle">↺</button><button class="ghost" id="d3bigBtn" onclick="d3big()">⤢ Bigger</button></span></h2>
         <div class="muted" id="d3info" style="font-size:12px;margin:-4px 0 8px;min-height:14px"></div>
         <div class="d3wrap"><canvas id="d3"></canvas><div id="d3photos"></div><div id="d3labels"></div>
+          <div id="sv" style="display:none"><div class="svphoto"><img id="svImg" alt=""><button class="svnav l" onclick="svStep(-1)" title="Back (←)">‹</button><button class="svnav r" onclick="svStep(1)" title="Forward (→)">›</button>
+            <div class="svcap" id="svCap"></div></div><canvas id="svMap" title="Where each photo was taken · click to jump"></canvas>
+            <div class="svtools"><button id="svPlay" onclick="svPlay()">▶ Play</button><button onclick="svGo(SV.items.length-1)">⌖ Latest</button><button onclick="api('/shots/take',{method:'POST'}).then(r=>toast('Photo saved · '+r.n)).catch(()=>{})">📷 Photo here</button><button title="Delete every street-view photo" onclick="api('/shots/clear',{method:'POST'}).then(()=>{toast('Photos cleared');tick()})">🗑 Clear</button></div>
+            <div class="d3empty" id="svEmpty">No photos yet.<br><small>Walk: one every ~3 m. Indoors, press Indoors on the map first.</small></div></div>
           <div class="d3tools" id="d3tools"><button id="d3walkBtn" onclick="d3walk()" title="Fly through the walk at eye height">▶ Walk it</button><button id="d3rawBtn" onclick="d3raw()" title="Show the raw depth surfaces from each snapshot">Raw depth</button><button title="Delete every 3D snapshot (places and paths stay)" onclick="api('/world/clear',{method:'POST'}).then(()=>{toast('3D snapshots cleared');tick()}).catch(()=>{})">🗑 Clear 3D</button></div><div class="d3empty" id="d3empty">Depth appears when the glasses stream.<br><small>Drag to orbit · wheel to zoom</small></div></div>
         <small class="muted" id="d3help">What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.</small>
       </div>
@@ -251,6 +266,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16p
 
     <div class="panel">
       <h2>Map <span class="muted" id="mapInfo" style="text-transform:none;letter-spacing:0;font-weight:400"></span><span class="right">
+        <button id="indoorBtn" onclick="toggleIndoors()" title="Indoors: ignore the phone's GPS; position = steps + the camera's turns (the compass only sets the start)">Indoors</button>
         <button id="followBtn" onclick="toggleFollow()">Following</button>
         <button onclick="markPlace()" title="Name the spot you're standing at">Mark place here</button>
         <button onclick="api('/route',{method:'DELETE'}).then(()=>toast('Route cancelled'))">Cancel route</button>
@@ -345,10 +361,11 @@ function renderLive(){
 // ---------------- 3D view (point cloud from the depth net)
 const D3={ready:false,pts:null,geo:null,cam:null,scene:null,ren:null,az:Math.PI,el:0.35,dist:6,tgt:null,drag:null,busy:false,last:0,n:0,
   mode:'live',wmesh:null,wmat:null,wgroup:null,whall:null,wrev:-1,wn:0,you:null,cone:null,raw:false,fly:null,ph:[]};
-function d3mode(m){D3.mode=m;$('d3live').className=m==='live'?'primary':'';$('d3world').className=m==='world'?'primary':'';$('d3tools').style.display=m==='world'?'flex':'none';if(m!=='world'){D3.fly=null;$('d3photos').innerHTML='';D3.ph=[]}
+function d3mode(m){D3.mode=m;$('d3live').className=m==='live'?'primary':'';$('d3world').className=m==='world'?'primary':'';$('d3street').className=m==='street'?'primary':'';
+  $('sv').style.display=m==='street'?'flex':'none';$('d3').style.visibility=m==='street'?'hidden':'visible';if(m==='street'){svPlayStop();renderStreet(true)}else svPlayStop();$('d3tools').style.display=m==='world'?'flex':'none';if(m!=='world'){D3.fly=null;$('d3photos').innerHTML='';D3.ph=[]}
   if(D3.ready){D3.grid.position.y=m==='world'?0:-1.6;D3.pts.visible=m==='live';D3.wmesh.visible=m==='world'&&D3.raw;D3.whall.visible=m==='world';D3.wgroup.visible=m==='world';D3.cone.visible=m==='live';D3.you.visible=m==='world';
     if(m==='world'){D3.az=Math.PI*0.8;D3.el=0.7;D3.dist=28;renderWorld(true)}else{D3.tgt.set(0,0,4);d3reset()}}
-  $('d3help').textContent=m==='live'?'What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.'
+  $('d3help').textContent=m==='street'?'Street view of your walk: a photo every ~3 m (and after every turn), pinned where it was taken. ‹ › or ← → to walk through, click the mini-map to jump. Indoors the position comes from steps + the camera\'s turns, so a straight hallway stays straight.':m==='live'?'What the camera sees as a cloud of points with distances (a neural net estimates depth from the single camera; faces set the scale). Things closer than 1.8 m across the path ahead block that stretch of the map and the route re-plans.'
     :'The hallways you walked, as boxes along your path (walls 2.6 m high; width from the depth net, else 2.4 m). Outdoors with good GPS it\'s a walkway instead. Every ~8 m of new ground the map makes a place and takes a snapshot: the photo floats above it (click to enlarge). 📸 takes one right here. ▶ Walk it flies through at eye height. Indoors: steps + compass.';
 }
 function d3init(){
@@ -373,7 +390,7 @@ function d3init(){
   cv.addEventListener('wheel',e=>{e.preventDefault();D3.dist=Math.max(1.5,Math.min(D3.mode==='world'?160:40,D3.dist*(e.deltaY>0?1.12:0.9)));d3draw()},{passive:false});
   D3.ready=true;d3size();window.addEventListener('resize',d3size);
 }
-function d3size(){const cv=$('d3'),w=cv.clientWidth||600,h=cv.clientHeight||375;D3.ren.setSize(w,h,false);D3.cam.aspect=w/h;D3.cam.updateProjectionMatrix();d3draw()}
+function d3size(){if(!D3.ready)return;const cv=$('d3'),w=cv.clientWidth||600,h=cv.clientHeight||375;D3.ren.setSize(w,h,false);D3.cam.aspect=w/h;D3.cam.updateProjectionMatrix();d3draw()}
 function d3reset(){if(D3.mode==='world'){D3.az=Math.PI*0.8;D3.el=0.7;D3.dist=28}else{D3.az=Math.PI;D3.el=0.35;D3.dist=6}d3draw()}
 function d3draw(){
   if(!D3.ready)return;
@@ -524,8 +541,57 @@ function flyStep(now){
   if(s>=f.len){setTimeout(()=>{if(D3.fly===f)d3walk()},900);return}
   requestAnimationFrame(flyStep);
 }
-function d3big(){const p=$('d3panel');p.classList.toggle('big');$('d3bigBtn').textContent=p.classList.contains('big')?'⤡ Smaller':'⤢ Bigger';d3size()}
+// ---------------- street view: photos along the walk + a mini-map of where they were taken
+const SV={items:[],i:-1,rev:-1,meta:null,play:null,fit:null};
+async function renderStreet(force){
+  if(force||S.shots_rev!==SV.rev){SV.rev=S.shots_rev;
+    try{const [sh,meta]=await Promise.all([api('/shots'),api('/world.json')]);const atEnd=SV.i<0||SV.i>=SV.items.length-1;
+      SV.items=sh.shots;SV.meta=meta;if(atEnd||SV.i>=SV.items.length)SV.i=SV.items.length-1;
+      $('svEmpty').style.display=SV.items.length?'none':'flex';svShow()}catch(e){}}
+  else svMap();
+}
+function svGo(i){if(!SV.items.length)return;SV.i=Math.max(0,Math.min(SV.items.length-1,i));svShow()}
+function svStep(d){svGo(SV.i+d)}
+function svShow(){
+  const it=SV.items[SV.i];if(!it){$('svImg').removeAttribute('src');$('svCap').innerHTML='';svMap();return}
+  if($('svImg').getAttribute('src')!=='/shots/'+it.id+'.jpg')$('svImg').src='/shots/'+it.id+'.jpg';
+  const when=new Date(it.ts*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+  const dirs=['N','NE','E','SE','S','SW','W','NW'];const dir=it.heading!=null?dirs[Math.round(it.heading/45)%8]:'';
+  $('svCap').innerHTML=`<b>${SV.i+1}/${SV.items.length}</b><span>${when}</span>${it.place&&!/^Place \d+$/.test(it.place)?`<span>${esc(it.place)}</span>`:''}${dir?`<span>facing ${dir}</span>`:''}${it.people&&it.people.length?`<span>👤 ${esc(it.people.join(', '))}</span>`:''}`;
+  svMap();
+}
+function svMap(){
+  const cv=$('svMap');if(!cv||$('sv').style.display==='none')return;const W=cv.clientWidth,H=cv.clientHeight;if(!W||!H)return;
+  if(cv.width!==W*2||cv.height!==H*2){cv.width=W*2;cv.height=H*2}
+  const g=cv.getContext('2d');g.setTransform(2,0,0,2,0,0);g.clearRect(0,0,W,H);g.fillStyle='#0b0e12';g.fillRect(0,0,W,H);
+  const M=SV.meta||{nodes:[],edges:[],pins:[],trail:[]},pts=SV.items.map(s=>[s.x,s.y]).concat(M.nodes.map(n=>[n.x,n.y]),M.pins.map(p=>[p.x,p.y]));
+  if(!pts.length){g.fillStyle='#64748b';g.font='12px system-ui';g.fillText('nothing walked yet',12,20);return}
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;pts.forEach(([x,y])=>{x0=Math.min(x0,x);x1=Math.max(x1,x);y0=Math.min(y0,y);y1=Math.max(y1,y)});
+  const span=Math.max(x1-x0,y1-y0,12),sc=Math.min((W-70)/span,(H-40)/span),cx=(x0+x1)/2,cy=(y0+y1)/2;
+  const P=(x,y)=>[W/2+(x-cx)*sc,H/2-(y-cy)*sc];SV.fit={P,inv:(px,py)=>[cx+(px-W/2)/sc,cy-(H/2-py)/sc]};
+  // grid every 5 m
+  g.strokeStyle='#161c24';g.lineWidth=1;for(let v=Math.floor((cx-span)/5)*5;v<cx+span;v+=5){const [px]=P(v,0);g.beginPath();g.moveTo(px,0);g.lineTo(px,H);g.stroke();const [,py]=P(0,v);g.beginPath();g.moveTo(0,py);g.lineTo(W,py);g.stroke()}
+  // paths + trail
+  const N={};M.nodes.forEach(n=>N[n.id]=n);
+  g.lineWidth=5;g.lineCap='round';M.edges.forEach(e=>{const a=N[e.a],b=N[e.b];if(!a||!b)return;g.strokeStyle=e.blocked?'#7f1d1d':'#263040';g.beginPath();g.moveTo(...P(a.x,a.y));g.lineTo(...P(b.x,b.y));g.stroke()});
+  if(M.trail&&M.trail.length>1){g.strokeStyle='#3b4a5e';g.lineWidth=1.5;g.beginPath();M.trail.forEach((t,i)=>{const p=P(t[0],t[1]);i?g.lineTo(...p):g.moveTo(...p)});g.stroke()}
+  // photos
+  SV.items.forEach((s,i)=>{const [px,py]=P(s.x,s.y);g.fillStyle=i===SV.i?'#3b82f6':(i<SV.i?'#94a3b8':'#475569');g.beginPath();g.arc(px,py,i===SV.i?5:3,0,Math.PI*2);g.fill();
+    if(i===SV.i&&s.heading!=null){const a=(s.heading-90)*Math.PI/180;g.fillStyle='rgba(59,130,246,.35)';g.beginPath();g.moveTo(px,py);g.arc(px,py,22,a-0.5,a+0.5);g.closePath();g.fill()}});
+  // places + people + you
+  g.font='11px system-ui';M.nodes.forEach(n=>{if(!n.named)return;const [px,py]=P(n.x,n.y);g.fillStyle='#3b82f6';g.beginPath();g.arc(px,py,4,0,Math.PI*2);g.fill();g.fillStyle='#cbd5e1';g.fillText(n.name,px+7,py+4)});
+  M.pins.forEach(p=>{const [px,py]=P(p.x,p.y);g.fillStyle=p.is_watch?'#ef4444':(p.met?'#4cc38a':'#f59e0b');g.beginPath();g.arc(px,py,4,0,Math.PI*2);g.fill();g.fillStyle='#e5e7eb';g.fillText(p.name||'?',px+7,py+4)});
+  const you=S&&S.map&&S.map.position;if(you&&you.x!=null){const [px,py]=P(you.x,you.y);g.strokeStyle='#3b82f6';g.lineWidth=2;g.beginPath();g.arc(px,py,7,0,Math.PI*2);g.stroke()}
+  g.fillStyle='#64748b';g.font='10px system-ui';g.fillText('N ↑  · 5 m grid',8,H-8);
+}
+$('svMap').addEventListener('click',e=>{if(!SV.fit||!SV.items.length)return;const r=e.target.getBoundingClientRect();const [x,y]=SV.fit.inv(e.clientX-r.left,e.clientY-r.top);
+  let best=-1,bd=Infinity;SV.items.forEach((s,i)=>{const d=Math.hypot(s.x-x,s.y-y);if(d<bd){bd=d;best=i}});if(best>=0)svGo(best)});
+function svPlay(){if(SV.play){svPlayStop();return}SV.play=setInterval(()=>{if(SV.i>=SV.items.length-1){svPlayStop();return}svStep(1)},700);$('svPlay').textContent='■ Stop'}
+function svPlayStop(){if(SV.play)clearInterval(SV.play);SV.play=null;const b=$('svPlay');if(b)b.textContent='▶ Play'}
+document.addEventListener('keydown',e=>{if(D3.mode!=='street'||$('lb').classList.contains('open'))return;if(e.key==='ArrowRight'){svStep(1);e.preventDefault()}if(e.key==='ArrowLeft'){svStep(-1);e.preventDefault()}});
+function d3big(){const p=$('d3panel');p.classList.toggle('big');$('d3bigBtn').textContent=p.classList.contains('big')?'⤡ Smaller':'⤢ Bigger';d3size();svMap()}
 async function render3D(){
+  if(D3.mode==='street'){renderStreet(false);$('d3info').textContent=`${S.n_shots||0} photo${S.n_shots===1?'':'s'} along the walk · ${S.indoors?'indoors: steps + camera':'GPS'}`;return}
   if(D3.mode==='world'){d3init();if(D3.ready)renderWorld(false);$('d3info').textContent=`${S.world_stamps||0} snapshot${S.world_stamps===1?'':'s'}${D3.wn?' · '+(D3.wn/1000).toFixed(1)+'k points':''} · ${S.map&&S.map.position?({good:'GPS',dr:'steps + compass',rough:'rough fix',none:'no position'})[S.map.position.quality]||S.map.position.quality:''}`;return}
   if(!S.has_cloud){$('d3info').textContent=S.depth&&S.depth.error?'depth error: '+S.depth.error:(S.depth===null?'depth off':'');return}
   d3init();if(!D3.ready||D3.busy)return;
@@ -959,9 +1025,10 @@ function drawMap(){
   if(!mapReady)return;
   const m=S.map,pos=m.position;
   if(pos.lat==null){$('mapMsg').style.display='block';$('mapMsg').textContent='Waiting for GPS from the phone…';}
-  else{$('mapMsg').style.display=pos.quality==='good'?'none':'block';$('mapMsg').textContent=pos.quality==='rough'?`GPS rough (±${Math.round(pos.acc)} m) — map building paused`:pos.quality==='dr'?'No good GPS: counting steps':'';}
+  else{$('mapMsg').style.display=pos.quality==='good'||(pos.indoors&&pos.quality==='dr')?'none':'block';$('mapMsg').textContent=pos.quality==='rough'?(pos.indoors?'Indoors: walk to start (steps + camera)':`GPS rough (±${Math.round(pos.acc)} m) — map building paused`):pos.quality==='dr'?'No good GPS: counting steps':'';}
+  $('indoorBtn').className=pos.indoors?'primary':'';$('indoorBtn').textContent=pos.indoors?'Indoors ✓':'Indoors';
   const info=[];if(m.near)info.push('near '+m.near);if(m.poi_status&&m.poi_status!=='ok')info.push('⚠ '+m.poi_status.split(':')[0]);
-  if(pos.lat!=null)info.push(`±${Math.round(pos.acc||0)} m · heading ${pos.heading!=null?Math.round(pos.heading)+'° ('+pos.heading_src+')':'unknown'} · ${m.nodes.length} places · ${m.pins.length} on map`);
+  if(pos.lat!=null)info.push(`${pos.indoors?'indoors · steps + camera':'±'+Math.round(pos.acc||0)+' m'} · heading ${pos.heading!=null?Math.round(pos.heading)+'° ('+({sensor:'compass',gps:'GPS',camera:'camera'})[pos.heading_src]||pos.heading_src+')':'unknown'} · ${m.nodes.length} places · ${m.pins.length} on map`);
   $('mapInfo').textContent=info.join(' · ');
   const keep=new Set();
   // you
@@ -1020,6 +1087,7 @@ function drawMap(){
   Object.keys(MR.layers).forEach(k=>{if(!keep.has(k))MR.remove(k)});
   if(!centered&&m.pins.length){MR.setView(m.pins[0].lat,m.pins[0].lng,20);centered=true}
 }
+async function toggleIndoors(){const on=!(S.settings&&S.settings.indoors);await api('/settings',{method:'POST',json:{indoors:on}});toast(on?'Indoors: steps + camera from here (GPS ignored)':'Outdoors: GPS again');tick()}
 async function saveSettings(){await api('/settings',{method:'POST',json:{convo_seconds:+$('convoS').value||30,convo_enabled:$('convoOn').checked}});toast('Saved')}
 async function saveKey(){const k=$('gkey').value.trim();await api('/settings',{method:'POST',json:{google_maps_key:k}});toast(k?'Key saved, loading Google Maps…':'Key removed, using Esri imagery');setTimeout(()=>location.reload(),600)}
 async function markPlace(){const n=prompt('Name the place you are standing at:','');if(n===null)return;try{const r=await api('/places/mark',{method:'POST',json:{name:n}});toast('Marked '+r.name)}catch(e){}}

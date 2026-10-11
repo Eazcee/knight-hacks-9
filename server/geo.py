@@ -19,6 +19,8 @@ from collections import deque
 
 import cv2
 
+from odometry import TurnTracker
+
 NODE_SPACING_M = float(os.environ.get("BEACON_NODE_M", 8.0))   # a new place every ~8 m walked
 SNAP_M = 6.0                 # within this of a place = you're at it
 GOOD_ACC_M = float(os.environ.get("BEACON_GOOD_ACC", 15.0))     # GPS accuracy (m) we trust to build the map
@@ -78,6 +80,12 @@ class GeoMap:
     def __init__(self, db):
         self.db = db
         self.qr = cv2.QRCodeDetector()
+        self.turns = TurnTracker()
+        self.indoors = False          # set from settings: GPS ignored, steps + camera turns (+ compass to start)
+        self.last_turn = 0.0          # committed camera turn on the last frame (deg), for snapshots
+        self.last_moved = 0.0         # meters moved on the last frame (for street-view shots)
+        self._dr_log = deque(maxlen=900)   # (ts, meters, heading) of every dead-reckoned move
+        self._node_ts = {}            # node id -> when it was created (to move a place made mid-turn)
         self.lat = self.lng = None
         self.acc = None
         self.fix_ts = None            # last trusted GPS fix
@@ -120,6 +128,11 @@ class GeoMap:
         lat0, lng0 = self.origin
         return ((lng - lng0) * 111320.0 * math.cos(math.radians(lat0)), (lat - lat0) * 110540.0)
 
+    def latlng_of(self, x, y):
+        """Local meters -> lat/lng (inverse of _xy)."""
+        lat0, lng0 = self.origin if self.origin else (self.lat or 0.0, self.lng or 0.0)
+        return lat0 + y / 110540.0, lng0 + x / (111320.0 * math.cos(math.radians(lat0)))
+
     def _set_position(self, lat, lng, ts):
         self.lat, self.lng = lat, lng
         self.x, self.y = self._xy(lat, lng)
@@ -136,13 +149,30 @@ class GeoMap:
         return offset_latlng(self.lat, self.lng, dist_m, self.heading + rel_deg)
 
     # ---- main update ---------------------------------------------------
-    def observe(self, img_bgr, heading_deg=None, steps=None, lat=None, lng=None, acc=None, ts=None, faces=0):
+    def observe(self, img_bgr, heading_deg=None, steps=None, lat=None, lng=None, acc=None, ts=None, faces=0, indoors=None):
         ts = ts or time.time()
         events = []
         self.last_img = img_bgr
+        if indoors is not None:
+            self.indoors = bool(indoors)
         if heading_deg is not None:
-            self.heading, self.heading_known, self.heading_src = float(heading_deg) % 360, True, "sensor"
+            self.turns.compass(ts, float(heading_deg))
             self.sensor_heading_ts = ts
+        turn, turn_mid = self.turns.update(img_bgr, ts)
+        self.last_turn = turn
+        if self.indoors:
+            # indoors: the compass only sets the starting direction; from then on the camera's turns move it
+            if not self.heading_known:
+                self.heading = float(heading_deg) % 360 if heading_deg is not None else 0.0
+                self.heading_known, self.heading_src = True, "camera"
+            if turn:
+                events.append(self._commit_turn(turn, turn_mid, ts))
+            if self.lat is not None:
+                lat = lng = None          # a phone fix only ever seeds the very first position indoors
+            elif lat is not None:
+                acc = max(float(acc or 30.0), 30.0)   # ...and counts as rough, never as a map-building fix
+        elif heading_deg is not None:
+            self.heading, self.heading_known, self.heading_src = float(heading_deg) % 360, True, "sensor"
 
         step_delta = 0
         if steps is not None:
@@ -192,6 +222,7 @@ class GeoMap:
             dist = step_delta * STEP_M
             nlat, nlng = offset_latlng(self.lat, self.lng, dist, self.heading)
             self._set_position(nlat, nlng, ts)
+            self._dr_log.append((ts, dist, self.heading))
             moved = dist
             if self.quality != "dr":
                 self.acc = min(self.acc or 10.0, 8.0)   # starting to dead-reckon: trust it about this much
@@ -208,6 +239,7 @@ class GeoMap:
             moving = ts - self.step_ts < 3.0
         else:
             moving = math.hypot(self.x - self.hist[0][1], self.y - self.hist[0][2]) >= MOVE_MIN_M
+        self.last_moved = min(moved, 5.0) if (moving and self.lat is not None) else 0.0
         if moving and self.lat is not None:
             self.dist_since_node += min(moved, 5.0)
         self.faces_since_node.append(faces)
@@ -255,10 +287,42 @@ class GeoMap:
         self._follow(events)
         return self._result(events)
 
+    def _commit_turn(self, turn, mid_ts, ts):
+        """The camera is sure you turned, a few seconds ago. Turn the heading, and re-walk the steps
+        taken since the turn along the new heading (they were credited to the old one meanwhile)."""
+        old = self.heading
+        redo = [(t, d) for t, d, h in self._dr_log if t >= mid_ts] if mid_ts else []
+        back = sum(d for _, d in redo)
+        if back and self.lat is not None:
+            lat, lng = offset_latlng(self.lat, self.lng, back, old + 180)   # walk back to the corner
+            self.lat, self.lng = lat, lng
+        pivot = self._xy(self.lat, self.lng) if self.lat is not None else (self.x, self.y)
+        self.heading = (old + turn) % 360
+        self.heading_src = "camera"
+        self.turns.compass_hist.clear()
+        if back and self.lat is not None:
+            lat, lng = offset_latlng(self.lat, self.lng, back, self.heading)   # ...and on along the new way
+            while self.trail and self.trail[-1][0] >= mid_ts:
+                self.trail.pop()
+            self._set_position(lat, lng, ts)
+            for i in range(len(self._dr_log)):
+                t, d, h = self._dr_log[i]
+                if t >= mid_ts:
+                    self._dr_log[i] = (t, d, self.heading)
+            nid = self.current_node
+            if nid is not None and self._node_ts.get(nid, 0) >= mid_ts:   # a place made mid-turn: it's here now
+                self.db.update_node(nid, x=self.x, y=self.y, lat=self.lat, lng=self.lng)
+                self.dist_since_node = 0.0
+        return {"type": "turn", "deg": turn, "heading": round(self.heading), "since": mid_ts,
+                "pivot": [round(pivot[0], 2), round(pivot[1], 2)], "moved_node": self.current_node if back else None}
+
     def _dr_live(self, ts):
-        """Dead reckoning is usable: a sensor heading and steps were seen recently."""
-        return (self.heading_src == "sensor" and ts - self.sensor_heading_ts < 10
-                and self.step_ts and ts - self.step_ts < 30)
+        """Dead reckoning is usable: a heading (compass, or indoors the camera) and steps were seen recently."""
+        if not (self.heading_known and self.step_ts and ts - self.step_ts < 30):
+            return False
+        if self.indoors:
+            return True
+        return self.heading_src == "sensor" and ts - self.sensor_heading_ts < 10
 
     def _nearest_node(self, lat, lng, nodes=None, max_m=None):
         best, bd = None, float("inf")
@@ -283,6 +347,7 @@ class GeoMap:
 
     def _create_node(self, name, events=None):
         nid = self.db.add_node(name, self.x, self.y, lat=self.lat, lng=self.lng)
+        self._node_ts[nid] = self.last_ts or time.time()
         if self.current_node is not None:
             self.db.add_edge(self.current_node, nid, self._edge_len(self.current_node, nid), self._crowd())
         self.current_node = nid
@@ -521,7 +586,7 @@ class GeoMap:
             "edges": self.db.edges(),
             "position": {"lat": self.lat, "lng": self.lng, "acc": self.acc, "quality": self.quality,
                          "heading": self.heading if self.heading_known else None, "heading_src": self.heading_src,
-                         "x": self.x, "y": self.y},
+                         "x": self.x, "y": self.y, "indoors": self.indoors},
             "trail": [[round(t[1], 6), round(t[2], 6)] for t in list(self.trail)[-400:]],
             "current_node": self.current_node,
             "route": self.route_public() if self.route else None,

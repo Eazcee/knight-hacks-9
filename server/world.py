@@ -116,6 +116,20 @@ class World:
         self.rev += 1
         return int(np.isfinite(xyz[..., 0]).sum())
 
+    def move(self, nid, x, y, heading):
+        """A place was repositioned (a turn recognised late): carry its snapshot along, re-turned."""
+        s = self.stamps.get(nid)
+        if not s:
+            return
+        dh = math.radians(heading - s["heading"])
+        e, n, u = s["xyz"][..., 0] - s["x"], s["xyz"][..., 1] - s["y"], s["xyz"][..., 2]
+        s["xyz"] = np.stack([e * math.cos(dh) + n * math.sin(dh) + x, -e * math.sin(dh) + n * math.cos(dh) + y, u], axis=2).astype(np.float32)
+        s["x"], s["y"], s["heading"] = x, y, heading
+        np.savez_compressed(os.path.join(self.path, f"n{nid}.npz"), xyz=s["xyz"], rgb=s["rgb"], depth=s["depth"], x=x, y=y,
+                            heading=heading, ts=s["ts"], walls=np.array(json.dumps(s.get("walls") or {})))
+        self._blob = None
+        self.rev += 1
+
     def remove(self, nid):
         self.stamps.pop(nid, None)
         for f in (os.path.join(self.path, f"n{nid}.npz"), self.photo_path(nid)):

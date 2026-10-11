@@ -49,7 +49,11 @@ data class UploadStats(
  * as the previous /frame response is back, so the upload rate follows the server's speed, stale
  * frames are never queued, and the collector is never blocked (encoding and HTTP run on IO).
  */
-class FrameUploader(private val settings: Settings, private val sensors: PhoneSensors) {
+class FrameUploader(
+    private val settings: Settings,
+    private val sensors: PhoneSensors,
+    private val compass: GlassesCompass,
+) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val client =
       OkHttpClient.Builder()
@@ -197,6 +201,8 @@ class FrameUploader(private val settings: Settings, private val sensors: PhoneSe
         addQueryParameter("acc", "%.1f".format(Locale.US, fix.accuracy))
       }
       sensors.steps?.let { addQueryParameter("steps", it.toString()) }
+      // The glasses' compass (deg clockwise from magnetic north), when Motion is delivering it.
+      compass.heading?.let { addQueryParameter("heading", "%.1f".format(Locale.US, it)) }
     }.build().toString()
   }
 

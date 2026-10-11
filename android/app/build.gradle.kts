@@ -65,5 +65,6 @@ dependencies {
   implementation(libs.mwdat.core)
   implementation(libs.mwdat.camera)
   implementation(libs.mwdat.display)
+  implementation(libs.mwdat.motion)
   debugImplementation(libs.androidx.compose.ui.tooling)
 }

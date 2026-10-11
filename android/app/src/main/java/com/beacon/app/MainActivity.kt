@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
           onGrantBluetooth = ::requestBluetooth,
           uploader = app.uploader,
           sensors = app.sensors,
+          compass = app.compass,
           settings = app.settings,
           onRegister = { app.glasses.register(this) },
           onUnregister = { app.glasses.unregister(this) },

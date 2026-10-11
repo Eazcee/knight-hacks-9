@@ -21,7 +21,15 @@ import com.meta.wearable.dat.core.types.LinkState
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
 import com.meta.wearable.dat.core.types.RegistrationState
+import com.meta.wearable.dat.motion.Motion
+import com.meta.wearable.dat.motion.addMotion
+import com.meta.wearable.dat.motion.types.MotionConfiguration
+import com.meta.wearable.dat.motion.types.MotionError
+import com.meta.wearable.dat.motion.types.MotionSamplingRate
+import com.meta.wearable.dat.motion.types.MotionSource
+import com.meta.wearable.dat.motion.types.MotionState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -97,6 +105,7 @@ class GlassesLink(
     private val context: Context,
     private val uploader: FrameUploader,
     private val sensors: PhoneSensors,
+    private val compass: GlassesCompass,
 ) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   // Frames are handled off the main thread, one at a time, in order.
@@ -119,6 +128,10 @@ class GlassesLink(
   private var reattachJob: Job? = null
   /** Consecutive sessions that ended before reaching STARTED, for the reconnect backoff. */
   private var failedAttempts = 0
+  private var motion: Motion? = null
+  private val motionJobs = mutableListOf<Job>()
+  private var motionRevivals = 0
+  @Volatile private var loggedFirstHeading = false
   // Frame-rate window for logSdkFrameRate (frame dispatcher only).
   private var ptsWindowStart = -1L
   private var ptsFrames = 0
@@ -368,6 +381,7 @@ class GlassesLink(
         _status.update { it.copy(message = null) }
         uploader.clearError()
         if (camera == null) addCamera(s)
+        if (motion == null) addMotion(s)
         if (sessionStarted) display.resend() else display.attach(s) // resumed vs. new
         sessionStarted = true
       }
@@ -517,7 +531,82 @@ class GlassesLink(
     ptsFrames = 0
   }
 
+  /**
+   * The glasses' Motion capability at 5 Hz, as in BirdSpotter's attachMotionIfNeeded: each sample
+   * from the glasses (not a Neural Band) goes to [compass], which turns it into a heading. Motion is
+   * a beta capability; if it won't attach, frames simply go without a heading.
+   */
+  private fun addMotion(s: DeviceSession) {
+    s.addMotion(MotionConfiguration(samplingRate = MotionSamplingRate.HZ_5))
+        .onSuccess { added ->
+          motion = added
+          Log.i(TAG, "Motion added at 5 Hz")
+          // samples has no replay: subscribe before start(), like the docs show.
+          motionJobs += scope.launch(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+            added.samples.collect { sample ->
+              if (sample.source != MotionSource.GLASSES) return@collect
+              val a = sample.accelerometer ?: return@collect
+              compass.onSample(
+                  GlassesMotionSample(
+                      acceleration = Vector3(a.x.toDouble(), a.y.toDouble(), a.z.toDouble()),
+                      magneticField = sample.magnetometer?.let { Vector3(it.x.toDouble(), it.y.toDouble(), it.z.toDouble()) },
+                  )
+              )
+              if (!loggedFirstHeading) {
+                compass.heading?.let {
+                  loggedFirstHeading = true
+                  Log.i(TAG, "Glasses compass: first heading %.0f° (magnetometer %s)".format(it, if (sample.magnetometer != null) "present" else "missing"))
+                }
+              }
+            }
+          }
+          motionJobs += scope.launch {
+            added.state.collect { state ->
+              Log.i(TAG, "Motion $state")
+              // Like BirdSpotter's reviveMotion: a stop we didn't ask for (e.g. a busy link) is an
+              // interruption, so start it again a few times before giving up. Not after an error:
+              // DEVICE_DISCONNECTED restarts on its own with the session, and CAPABILITY_CLOSED
+              // needs a fresh addMotion (handled in the errors collector), not start().
+              if (state == MotionState.STOPPED && motion === added && session != null &&
+                  added.errors.value == null && motionRevivals < MAX_MOTION_REVIVALS) {
+                motionRevivals++
+                delay(MOTION_REVIVE_DELAY_MS)
+                if (motion === added && added.state.value == MotionState.STOPPED) added.start()
+              }
+            }
+          }
+          motionJobs += scope.launch {
+            added.errors.collect { error ->
+              if (error == null) return@collect
+              Log.w(TAG, "Motion error: ${error.description}")
+              // Per the docs: a closed Motion is finished; add it again to a started session.
+              if (error == MotionError.CAPABILITY_CLOSED && motion === added && motionRevivals < MAX_MOTION_REVIVALS) {
+                motionRevivals++
+                motionJobs.filter { it != coroutineContext[Job] }.forEach { it.cancel() }
+                motion = null
+                delay(MOTION_REVIVE_DELAY_MS)
+                val live = session
+                if (live != null && _status.value.session == DeviceSessionState.STARTED && motion == null) {
+                  Log.i(TAG, "Motion closed: adding it again")
+                  addMotion(live)
+                }
+              }
+            }
+          }
+          added.start()
+        }
+        .onFailure { error, _ ->
+          // CAPABILITY_DENIED and friends: no compass, everything else carries on.
+          Log.w(TAG, "addMotion failed: ${error.description}")
+        }
+  }
+
   private fun teardownSession() {
+    motionJobs.forEach { it.cancel() }
+    motionJobs.clear()
+    motion = null
+    motionRevivals = 0 // the restart budget is per session, so a Motion that keeps closing can't loop
+    compass.clear()
     reattachJob?.cancel()
     cameraJobs.forEach { it.cancel() }
     cameraJobs.clear()
@@ -554,6 +643,8 @@ class GlassesLink(
     private const val RETRY_DELAY_MS = 3_000L
     private const val MAX_RETRY_DELAY_MS = 30_000L
     private const val OFF_GRACE_MS = 5_000L
+    private const val MAX_MOTION_REVIVALS = 3
+    private const val MOTION_REVIVE_DELAY_MS = 1_000L
     private const val REATTACH_DELAY_MS = 2_000L
     private const val REATTACH_WINDOW_MS = 60_000L
     private const val MAX_REATTACHES = 3

@@ -27,6 +27,8 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -50,6 +52,7 @@ fun StatusScreen(
     onGrantBluetooth: () -> Unit,
     uploader: FrameUploader,
     sensors: PhoneSensors,
+    compass: GlassesCompass,
     settings: Settings,
     onRegister: () -> Unit,
     onUnregister: () -> Unit,
@@ -153,7 +156,18 @@ fun StatusScreen(
               },
               if (phone.hasStepSensor && !phone.stepsAllowed) MaterialTheme.colorScheme.error else null,
           )
-          StatRow("Heading", "from walking direction (server)")
+          // The compass changes several times a second; poll it rather than recompose per sample.
+          val heading by produceState<Double?>(null, compass) {
+            while (true) {
+              value = compass.heading
+              delay(500)
+            }
+          }
+          StatRow(
+              "Heading (glasses compass)",
+              heading?.let { "%.0f° %s".format(it, compassPoint(it)) } ?: "none (server uses walking direction)",
+              if (heading != null) Good else null,
+          )
         }
 
         Section("Server") {
@@ -266,6 +280,10 @@ private fun CardPreview(card: DisplayCard) {
     }
   }
 }
+
+/** 8-point label for a heading, e.g. 92° -> E. */
+private fun compassPoint(deg: Double): String =
+    listOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")[(((deg + 22.5) % 360) / 45).toInt()]
 
 private val Good = Color(0xFF2E7D32)
 private val Warn = Color(0xFFEF6C00)

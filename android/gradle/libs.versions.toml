@@ -27,6 +27,7 @@ play-services-location = { group = "com.google.android.gms", name = "play-servic
 mwdat-core = { group = "com.meta.wearable", name = "mwdat-core", version.ref = "mwdat" }
 mwdat-camera = { group = "com.meta.wearable", name = "mwdat-camera", version.ref = "mwdat" }
 mwdat-display = { group = "com.meta.wearable", name = "mwdat-display", version.ref = "mwdat" }
+mwdat-motion = { group = "com.meta.wearable", name = "mwdat-motion", version.ref = "mwdat" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

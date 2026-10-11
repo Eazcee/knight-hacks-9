@@ -14,6 +14,9 @@ class BeaconApplication : Application() {
   lateinit var sensors: PhoneSensors
     private set
 
+  lateinit var compass: GlassesCompass
+    private set
+
   lateinit var uploader: FrameUploader
     private set
 
@@ -24,7 +27,8 @@ class BeaconApplication : Application() {
     super.onCreate()
     settings = Settings(this)
     sensors = PhoneSensors(this)
-    uploader = FrameUploader(settings, sensors)
-    glasses = GlassesLink(this, uploader, sensors)
+    compass = GlassesCompass()
+    uploader = FrameUploader(settings, sensors, compass)
+    glasses = GlassesLink(this, uploader, sensors, compass)
   }
 }

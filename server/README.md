@@ -45,8 +45,9 @@ First start downloads the Apache-2.0 AuraFace v1 detector and recognizer from Hu
 
 Test everything with no hardware:
 ```bash
-python test_demo.py          # simulated walk + people + alert + reroute (all should PASS)
-python test_training.py      # photos, quality, train mode, merge, remove, map clear (all should PASS)
+python test_auraface_server.py  # real AuraFace model + FastAPI /frame integration (all should PASS)
+python test_demo.py             # simulated walk + people + alert + reroute (all should PASS)
+python test_training.py         # photos, quality, train mode, merge, remove, map clear (all should PASS)
 python test_range.py         # far faces, "possible" alerts, Scan on a 12 MP photo (all should PASS)
 python sim_walk.py --reset   # fake GPS walk: watch the map build, pins appear, a route draw and reroute
 python webcam_client.py --show --lat 28.6024 --lng -81.2001   # laptop webcam → server, faces get pins
